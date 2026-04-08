@@ -11,15 +11,19 @@ export default function Layout() {
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-lgs-bg">
-        <div className="max-w-md w-full p-8 bg-white rounded-xl shadow-sm border border-slate-100 text-center">
-          <h1 className="text-2xl font-bold text-lgs-blue mb-2">LGS Pathways Studio</h1>
-          <p className="text-slate-500 mb-8">Sign in to access the Impact Platform</p>
-          <button
-            onClick={() => signIn()}
-            className="w-full bg-lgs-red text-white py-2 px-4 rounded-lg font-medium hover:bg-lgs-red-dark transition-colors"
-          >
-            Sign In with Google
-          </button>
+        <div className="max-w-md w-full bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="bg-lgs-blue p-8 flex flex-col items-center justify-center text-center">
+            <img src="/logo.png" alt="Liberty Grove Schools" className="h-32 object-contain mb-4" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          </div>
+          <div className="p-8 text-center">
+            <p className="text-slate-500 mb-8">Sign in to access the platform</p>
+            <button
+              onClick={() => signIn()}
+              className="w-full bg-lgs-red text-white py-2 px-4 rounded-lg font-medium hover:bg-lgs-red-dark transition-colors"
+            >
+              Sign In with Google
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -39,11 +43,9 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className="w-64 bg-lgs-blue text-white flex flex-col shadow-xl z-10">
         <div className="p-6 border-b border-lgs-blue-dark">
-          <div className="flex items-center gap-2 mb-2">
-            <img src="/logo.png" alt="LGS Logo" className="w-8 h-8 object-contain bg-white rounded p-1" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-            <h1 className="text-xl font-bold tracking-tight leading-tight">LGS Pathways<br/>Studio</h1>
+          <div className="flex items-center justify-center mb-4">
+            <img src="/logo.png" alt="Liberty Grove Schools" className="w-full h-auto object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           </div>
-          <p className="text-sm text-lgs-blue-light font-medium">Impact Platform</p>
         </div>
         
         <nav className="flex-1 py-4 space-y-1">

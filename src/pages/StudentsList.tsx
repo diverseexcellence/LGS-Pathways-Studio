@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
+import { Link, useNavigate } from 'react-router-dom';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from '../lib/utils';
-import { Users, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Users, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, Search, AlertCircle } from 'lucide-react';
 
 export default function StudentsList() {
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchStudents = async () => {
@@ -70,10 +74,66 @@ export default function StudentsList() {
     return <ArrowDown className="w-4 h-4 ml-1 text-lgs-blue" />;
   };
 
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+
+    setIsSearching(true);
+    setSearchError('');
+
+    try {
+      const q = query(collection(db, 'students'), where('stn', '==', searchQuery.trim()));
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        setSearchError('No student found with that STN.');
+      } else {
+        navigate(`/students/${searchQuery.trim()}`);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, 'students');
+      setSearchError('An error occurred while searching.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   if (loading) return <div className="p-8">Loading students...</div>;
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto">
+      {/* Student Search */}
+      <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+        <h2 className="text-lg font-bold text-lgs-blue mb-4 flex items-center gap-2">
+          <Search className="w-5 h-5 text-lgs-red" />
+          Student Search
+        </h2>
+        <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-4">
+          <div className="flex-1">
+            <input
+              type="text"
+              placeholder="Enter Student Test Number (STN)"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none transition-all text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={isSearching || !searchQuery.trim()}
+            className="px-8 py-3 bg-lgs-red text-white rounded-xl font-bold hover:bg-lgs-red-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {isSearching ? 'Searching...' : 'Search'}
+          </button>
+        </form>
+        {searchError && (
+          <div className="mt-4 p-3 bg-red-50 text-red-700 rounded-lg flex items-center gap-2 text-sm font-medium">
+            <AlertCircle className="w-4 h-4" />
+            {searchError}
+          </div>
+        )}
+      </div>
+
       <div>
         <h1 className="text-2xl font-bold text-lgs-blue flex items-center gap-2">
           <Users className="w-6 h-6 text-lgs-red" />
@@ -112,7 +172,7 @@ export default function StudentsList() {
               sortedStudents.map((student) => (
                 <tr key={student.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4 font-medium text-slate-900">{student.stn}</td>
-                  <td className="px-6 py-4 text-slate-600">{student.grade || 'N/A'}</td>
+                  <td className="px-6 py-4 text-slate-600">{student.grade ? String(student.grade).replace(/^0+(?=\d)/, '') : 'N/A'}</td>
                   <td className="px-6 py-4">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       student.tier === 'Tier 1' ? 'bg-green-100 text-green-700' :

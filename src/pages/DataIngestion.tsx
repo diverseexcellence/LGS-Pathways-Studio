@@ -71,17 +71,29 @@ export default function DataIngestion() {
                 
                 const getVal = (row: any, searchKeys: string[]) => {
                   const actualKeys = Object.keys(row);
-                  // Exact match
+                  
+                  // 1. Exact match
                   for (const search of searchKeys) {
                     const searchLower = search.toLowerCase();
                     const match = actualKeys.find(k => k.trim().toLowerCase() === searchLower);
-                    if (match && row[match]) return row[match];
+                    if (match && row[match] !== undefined && row[match] !== '') return String(row[match]).trim();
                   }
-                  // Partial match
+                  
+                  // 2. Exact match ignoring prefix (e.g. "STUDENTS.Grade_Level")
+                  for (const search of searchKeys) {
+                    const searchLower = search.toLowerCase();
+                    const match = actualKeys.find(k => {
+                      const normalized = k.trim().toLowerCase();
+                      return normalized.endsWith(`.${searchLower}`);
+                    });
+                    if (match && row[match] !== undefined && row[match] !== '') return String(row[match]).trim();
+                  }
+
+                  // 3. Partial match
                   for (const search of searchKeys) {
                     const searchLower = search.toLowerCase();
                     const match = actualKeys.find(k => k.trim().toLowerCase().includes(searchLower));
-                    if (match && row[match]) return row[match];
+                    if (match && row[match] !== undefined && row[match] !== '') return String(row[match]).trim();
                   }
                   return null;
                 };
@@ -95,16 +107,19 @@ export default function DataIngestion() {
                     const studentRef = doc(db, 'students', stn);
                     await setDoc(studentRef, {
                       stn,
-                      grade: getVal(row, ['Grade', 'Enrolled Grade', 'Grade_Level']) || '',
+                      grade: (getVal(row, ['Grade_Level', 'Grade', 'Enrolled Grade']) || '').replace(/^0+(?=\d)/, ''),
                       gender: getVal(row, ['Gender']) || '',
                       ethnicity: getVal(row, ['Ethnicity', 'Race']) || '',
                       spedStatus: getVal(row, ['Special Education', 'SPED']) || '',
                       ellStatus: getVal(row, ['English Learner', 'ELL']) || '',
                       section504: getVal(row, ['504']) || '',
+                      dob: getVal(row, ['DOB', 'Date of Birth', 'Birth Date']) || '',
+                      homeRoom: getVal(row, ['Home_Room', 'Homeroom', 'Home Room']) || '',
                       tier: 'Pending',
                       tierStatus: 'Pending',
                       lastUpdated: new Date().toISOString(),
-                      fileName: currentFile.name
+                      fileName: currentFile.name,
+                      details: JSON.stringify(row)
                     }, { merge: true });
                   } else {
                     // Assessment data
@@ -259,6 +274,8 @@ export default function DataIngestion() {
               <option value="ILEARN">ILEARN Checkpoint Data</option>
               <option value="IXL">IXL Diagnostic Data</option>
               <option value="Acadience">Acadience Reading Data</option>
+              <option value="IREAD">IREAD Data</option>
+              <option value="WIDA">WIDA Data</option>
             </select>
           </div>
 

@@ -70,17 +70,29 @@ export default function StudentProfile() {
 
     const getVal = (searchKeys: string[]) => {
       const actualKeys = Object.keys(rawDetails);
-      // Exact match (case-insensitive, trimmed)
+      
+      // 1. Exact match (case-insensitive, trimmed)
       for (const search of searchKeys) {
         const searchLower = search.toLowerCase();
         const match = actualKeys.find(k => k.trim().toLowerCase() === searchLower);
-        if (match && rawDetails[match]) return { value: rawDetails[match], key: match };
+        if (match && rawDetails[match] !== undefined && rawDetails[match] !== '') return { value: String(rawDetails[match]).trim(), key: match };
       }
-      // Partial match
+      
+      // 2. Exact match ignoring prefix
+      for (const search of searchKeys) {
+        const searchLower = search.toLowerCase();
+        const match = actualKeys.find(k => {
+          const normalized = k.trim().toLowerCase();
+          return normalized.endsWith(`.${searchLower}`);
+        });
+        if (match && rawDetails[match] !== undefined && rawDetails[match] !== '') return { value: String(rawDetails[match]).trim(), key: match };
+      }
+
+      // 3. Partial match
       for (const search of searchKeys) {
         const searchLower = search.toLowerCase();
         const match = actualKeys.find(k => k.trim().toLowerCase().includes(searchLower));
-        if (match && rawDetails[match]) return { value: rawDetails[match], key: match };
+        if (match && rawDetails[match] !== undefined && rawDetails[match] !== '') return { value: String(rawDetails[match]).trim(), key: match };
       }
       return null;
     };
@@ -226,32 +238,50 @@ export default function StudentProfile() {
         return "Tier 2";
       };
 
-      const sortedAssessments = [...assessments].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const assessmentsWithDisplay = assessments.map(a => ({
+        ...a,
+        displayData: getAssessmentDisplayData(a)
+      }));
+
+      const sortedAssessments = assessmentsWithDisplay.sort((a, b) => {
+        const dateA = new Date(a.displayData.formattedDate).getTime();
+        const dateB = new Date(b.displayData.formattedDate).getTime();
+        const timeA = isNaN(dateA) ? new Date(a.date).getTime() : dateA;
+        const timeB = isNaN(dateB) ? new Date(b.date).getTime() : dateB;
+        return timeB - timeA;
+      });
       
       let elaAssessment = null;
       let mathAssessment = null;
 
       for (const a of sortedAssessments) {
-        const displayData = getAssessmentDisplayData(a);
-        if (!elaAssessment && displayData.subject === 'ELA') {
-          elaAssessment = displayData;
+        if (!elaAssessment && a.displayData.subject === 'ELA') {
+          elaAssessment = a.displayData;
         }
-        if (!mathAssessment && displayData.subject === 'Math') {
-          mathAssessment = displayData;
+        if (!mathAssessment && a.displayData.subject === 'Math') {
+          mathAssessment = a.displayData;
         }
       }
 
-      const elaOnOrAbove = interpretOnOrAboveFromTier(elaAssessment?.proficiency);
+      let elaOnOrAbove = null;
+      if (elaAssessment) {
+        elaOnOrAbove = interpretOnOrAboveFromTier(elaAssessment.proficiency);
+        if (elaOnOrAbove === null) {
+          const actualKeys = Object.keys(elaAssessment.rawDetails);
+          const percentileKey = actualKeys.find(k => k.toLowerCase().includes('percentile'));
+          const elaPercentile = percentileKey ? elaAssessment.rawDetails[percentileKey] : null;
+          elaOnOrAbove = interpretOnOrAboveFromPercentile(elaPercentile);
+        }
+      }
       
       let mathOnOrAbove = null;
       if (mathAssessment) {
-        const actualKeys = Object.keys(mathAssessment.rawDetails);
-        const percentileKey = actualKeys.find(k => k.toLowerCase().includes('percentile'));
-        const mathPercentile = percentileKey ? mathAssessment.rawDetails[percentileKey] : null;
-        
-        mathOnOrAbove = interpretOnOrAboveFromPercentile(mathPercentile);
+        mathOnOrAbove = interpretOnOrAboveFromTier(mathAssessment.proficiency);
         if (mathOnOrAbove === null) {
-          mathOnOrAbove = interpretOnOrAboveFromTier(mathAssessment.proficiency);
+          const actualKeys = Object.keys(mathAssessment.rawDetails);
+          const percentileKey = actualKeys.find(k => k.toLowerCase().includes('percentile'));
+          const mathPercentile = percentileKey ? mathAssessment.rawDetails[percentileKey] : null;
+          mathOnOrAbove = interpretOnOrAboveFromPercentile(mathPercentile);
         }
       }
 
@@ -450,6 +480,44 @@ export default function StudentProfile() {
     return <ArrowDown className="w-4 h-4 ml-1 text-lgs-blue" />;
   };
 
+  const getDemographicVal = (searchKeys: string[], fallback: any) => {
+    if (fallback) return fallback;
+    if (student && student.details) {
+      try {
+        const rawDetails = JSON.parse(student.details);
+        const actualKeys = Object.keys(rawDetails);
+        
+        for (const search of searchKeys) {
+          const searchLower = search.toLowerCase();
+          const match = actualKeys.find(k => k.trim().toLowerCase() === searchLower);
+          if (match && rawDetails[match] !== undefined && rawDetails[match] !== '') return String(rawDetails[match]).trim();
+        }
+        
+        for (const search of searchKeys) {
+          const searchLower = search.toLowerCase();
+          const match = actualKeys.find(k => k.trim().toLowerCase().endsWith(`.${searchLower}`));
+          if (match && rawDetails[match] !== undefined && rawDetails[match] !== '') return String(rawDetails[match]).trim();
+        }
+
+        for (const search of searchKeys) {
+          const searchLower = search.toLowerCase();
+          const match = actualKeys.find(k => k.trim().toLowerCase().includes(searchLower));
+          if (match && rawDetails[match] !== undefined && rawDetails[match] !== '') return String(rawDetails[match]).trim();
+        }
+      } catch (e) {}
+    }
+    return 'N/A';
+  };
+
+  const calculateAge = (dobString: string) => {
+    if (!dobString || dobString === 'N/A') return 'N/A';
+    const dob = new Date(dobString);
+    if (isNaN(dob.getTime())) return 'N/A';
+    const ageDifMs = Date.now() - dob.getTime();
+    const ageDate = new Date(ageDifMs);
+    return Math.abs(ageDate.getUTCFullYear() - 1970);
+  };
+
   if (loading) return <div className="p-8">Loading student profile...</div>;
   if (!student) return <div className="p-8">Student not found.</div>;
 
@@ -462,23 +530,42 @@ export default function StudentProfile() {
             <User className="w-6 h-6 text-lgs-red" />
             Student STN: {student.stn}
           </h1>
-          <div className="mt-2 flex gap-4 text-sm text-slate-600 items-center">
-            <span className="bg-slate-100 px-2 py-1 rounded">Grade: {student.grade || 'N/A'}</span>
-            <span className="bg-slate-100 px-2 py-1 rounded">Gender: {student.gender || 'N/A'}</span>
-            <span className="bg-slate-100 px-2 py-1 rounded">Ethnicity: {student.ethnicity || 'N/A'}</span>
-            <button onClick={() => setShowDemographics(true)} className="text-lgs-red hover:text-lgs-red-dark hover:underline text-sm font-medium">
+          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-600 items-center">
+            <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Grade: {student.grade ? String(student.grade).replace(/^0+(?=\d)/, '') : 'N/A'}</span>
+            <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Gender: {student.gender || 'N/A'}</span>
+            <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Ethnicity: {student.ethnicity || 'N/A'}</span>
+            <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Age: {calculateAge(getDemographicVal(['DOB', 'Date of Birth', 'Birth Date'], student.dob))}</span>
+            <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Home Room: {getDemographicVal(['Home_Room', 'Homeroom', 'Home Room'], student.homeRoom)}</span>
+            <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Last Updated: {student.lastUpdated ? new Date(student.lastUpdated).toLocaleDateString() : 'N/A'}</span>
+            <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Source: {student.fileName || 'Unknown'}</span>
+            <button onClick={() => setShowDemographics(true)} className="text-lgs-red hover:text-lgs-red-dark hover:underline text-sm font-medium ml-2">
               View All Demographics
             </button>
           </div>
         </div>
-        <div className="text-right">
-          <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full font-medium ${
-            student.tier === 'Tier 1' ? 'bg-green-100 text-green-700' :
-            student.tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700' :
-            student.tier === 'Tier 3' ? 'bg-red-100 text-red-700' :
-            'bg-slate-100 text-lgs-blue'
-          }`}>
-            Tier: {student.tier} ({student.tierStatus})
+        <div className="text-right flex flex-col items-end">
+          <div className="flex items-center gap-2 relative group">
+            <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full font-medium ${
+              student.tier === 'Tier 1' ? 'bg-green-100 text-green-700' :
+              student.tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700' :
+              student.tier === 'Tier 3' ? 'bg-red-100 text-red-700' :
+              'bg-slate-100 text-lgs-blue'
+            }`}>
+              Tier: {student.tier} ({student.tierStatus})
+            </div>
+            <Info className="w-5 h-5 text-slate-400 cursor-help" />
+            <div className="absolute top-full right-0 mt-2 hidden group-hover:block w-80 p-4 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 pointer-events-none text-left">
+              <h4 className="font-bold text-sm mb-2 text-slate-100">Tiering Criteria</h4>
+              <div className="space-y-2">
+                <p><strong className="text-green-400">Tier 1:</strong> On/Above grade level in BOTH Math and ELA.</p>
+                <p><strong className="text-yellow-400">Tier 2:</strong> On/Above grade level in ONE subject, Below in the other.</p>
+                <p><strong className="text-red-400">Tier 3:</strong> Below grade level in BOTH Math and ELA.</p>
+                <div className="border-t border-slate-600 pt-2 mt-2">
+                  <p><strong className="text-slate-300">Calculation:</strong> Evaluates the most recent assessment for each subject. "On/Above" requires scoring &ge; 40th percentile or achieving a "Proficient"/"Meets" status.</p>
+                </div>
+              </div>
+              <div className="absolute bottom-full right-4 border-4 border-transparent border-b-slate-800"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -678,7 +765,7 @@ export default function StudentProfile() {
               </div>
               <div className="grid grid-cols-3 border-b border-slate-100 pb-2">
                 <span className="text-slate-500 font-medium">Grade</span>
-                <span className="col-span-2 text-slate-900">{student.grade || 'N/A'}</span>
+                <span className="col-span-2 text-slate-900">{student.grade ? String(student.grade).replace(/^0+(?=\d)/, '') : 'N/A'}</span>
               </div>
               <div className="grid grid-cols-3 border-b border-slate-100 pb-2">
                 <span className="text-slate-500 font-medium">Gender</span>
@@ -689,16 +776,16 @@ export default function StudentProfile() {
                 <span className="col-span-2 text-slate-900">{student.ethnicity || 'N/A'}</span>
               </div>
               <div className="grid grid-cols-3 border-b border-slate-100 pb-2">
-                <span className="text-slate-500 font-medium">SPED Status</span>
-                <span className="col-span-2 text-slate-900">{student.spedStatus || 'N/A'}</span>
+                <span className="text-slate-500 font-medium">Age</span>
+                <span className="col-span-2 text-slate-900">{calculateAge(getDemographicVal(['DOB', 'Date of Birth', 'Birth Date'], student.dob))}</span>
+              </div>
+              <div className="grid grid-cols-3 border-b border-slate-100 pb-2">
+                <span className="text-slate-500 font-medium">Home Room</span>
+                <span className="col-span-2 text-slate-900">{getDemographicVal(['Home_Room', 'Homeroom', 'Home Room'], student.homeRoom)}</span>
               </div>
               <div className="grid grid-cols-3 border-b border-slate-100 pb-2">
                 <span className="text-slate-500 font-medium">ELL Status</span>
                 <span className="col-span-2 text-slate-900">{student.ellStatus || 'N/A'}</span>
-              </div>
-              <div className="grid grid-cols-3 border-b border-slate-100 pb-2">
-                <span className="text-slate-500 font-medium">Section 504</span>
-                <span className="col-span-2 text-slate-900">{student.section504 || 'N/A'}</span>
               </div>
               <div className="grid grid-cols-3 border-b border-slate-100 pb-2">
                 <span className="text-slate-500 font-medium">Last Updated</span>
@@ -709,6 +796,20 @@ export default function StudentProfile() {
                 <span className="col-span-2 text-slate-900">{student.fileName || 'Unknown'}</span>
               </div>
             </div>
+
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <h4 className="font-medium text-slate-900 mb-2">Raw Source Data</h4>
+              {student.details ? (
+                <div className="bg-slate-900 text-slate-50 p-4 rounded-lg overflow-x-auto font-mono text-xs max-h-48 overflow-y-auto">
+                  <pre>{JSON.stringify(JSON.parse(student.details || '{}'), null, 2)}</pre>
+                </div>
+              ) : (
+                <div className="bg-slate-50 text-slate-500 p-4 rounded-lg text-sm border border-slate-200">
+                  Raw source data is not available for this record. Please re-upload the PowerSchool Demographics file to capture the raw data.
+                </div>
+              )}
+            </div>
+
             <div className="mt-6 flex justify-end">
               <button onClick={() => setShowDemographics(false)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">
                 Close
