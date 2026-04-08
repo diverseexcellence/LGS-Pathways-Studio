@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application (Admin or Teacher)",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "teacher"] },
+        "name": { "type": "string" }
+      },
+      "required": ["email", "role"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Student demographic and tiering information",
+      "type": "object",
+      "properties": {
+        "stn": { "type": "string" },
+        "grade": { "type": "string" },
+        "gender": { "type": "string" },
+        "ethnicity": { "type": "string" },
+        "spedStatus": { "type": "string" },
+        "ellStatus": { "type": "string" },
+        "section504": { "type": "string" },
+        "tier": { "type": "string", "enum": ["Tier 1", "Tier 2", "Tier 3", "Pending", "Unassigned"] },
+        "tierStatus": { "type": "string", "enum": ["Finalized", "AI Recommended", "Pending"] },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["stn", "tier", "tierStatus"]
+    },
+    "Assessment": {
+      "title": "Assessment",
+      "description": "A student assessment record",
+      "type": "object",
+      "properties": {
+        "stn": { "type": "string" },
+        "type": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "subject": { "type": "string" },
+        "score": { "type": "number" },
+        "proficiency": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["stn", "type", "date"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Audit trail for student records",
+      "type": "object",
+      "properties": {
+        "stn": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "action": { "type": "string" },
+        "userId": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["stn", "date", "action", "userId"]
+    },
+    "Note": {
+      "title": "Note",
+      "description": "Collaboration note for a student",
+      "type": "object",
+      "properties": {
+        "stn": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "role": { "type": "string" },
+        "content": { "type": "string" },
+        "type": { "type": "string", "enum": ["Teacher Note", "Admin Note"] }
+      },
+      "required": ["stn", "date", "authorId", "content", "type"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles and roles"
+    },
+    "/students/{stn}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Student records keyed by STN"
+    },
+    "/assessments/{assessmentId}": {
+      "schema": { "$ref": "#/entities/Assessment" },
+      "description": "Assessment records"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Audit logs for tiering and data changes"
+    },
+    "/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/Note" },
+      "description": "Notes added by teachers or admins"
+    }
+  }
+}

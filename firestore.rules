@@ -1,0 +1,196 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (from Firebase Auth)
+    // Fields:
+    //   - email: string (required)
+    //   - role: string (required, 'admin' or 'teacher')
+    //   - name: string (optional)
+    //
+    // Collection: students
+    // Document ID: stn
+    // Fields:
+    //   - stn: string (required)
+    //   - grade: string (optional)
+    //   - gender: string (optional)
+    //   - ethnicity: string (optional)
+    //   - spedStatus: string (optional)
+    //   - ellStatus: string (optional)
+    //   - section504: string (optional)
+    //   - tier: string (required, 'Tier 1', 'Tier 2', 'Tier 3', 'Pending', 'Unassigned')
+    //   - tierStatus: string (required, 'Finalized', 'AI Recommended', 'Pending')
+    //   - lastUpdated: string (optional)
+    //
+    // Collection: assessments
+    // Document ID: auto-id
+    // Fields:
+    //   - stn: string (required)
+    //   - type: string (required)
+    //   - date: string (required)
+    //   - subject: string (optional)
+    //   - score: number (optional)
+    //   - proficiency: string (optional)
+    //   - details: string (optional)
+    //
+    // Collection: audit_logs
+    // Document ID: auto-id
+    // Fields:
+    //   - stn: string (required)
+    //   - date: string (required)
+    //   - action: string (required)
+    //   - userId: string (required)
+    //   - details: string (optional)
+    //
+    // Collection: notes
+    // Document ID: auto-id
+    // Fields:
+    //   - stn: string (required)
+    //   - date: string (required)
+    //   - authorId: string (required)
+    //   - authorName: string (optional)
+    //   - role: string (optional)
+    //   - content: string (required)
+    //   - type: string (required, 'Teacher Note' or 'Admin Note')
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "bunzueta@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isTeacher() {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    function isStaff() {
+      return isAdmin() || isTeacher();
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function isValidUser(data) {
+      return hasRequiredFields(['email', 'role']) &&
+             data.email is string && data.email.size() < 100 &&
+             data.role in ['admin', 'teacher'] &&
+             (!('name' in data) || (data.name is string && data.name.size() < 100));
+    }
+
+    function isValidStudent(data) {
+      return hasRequiredFields(['stn', 'tier', 'tierStatus']) &&
+             data.stn is string && data.stn.size() > 0 && data.stn.size() < 50 &&
+             data.tier in ['Tier 1', 'Tier 2', 'Tier 3', 'Pending', 'Unassigned'] &&
+             data.tierStatus in ['Finalized', 'AI Recommended', 'System Recommended', 'Pending'] &&
+             (!('grade' in data) || (data.grade is string && data.grade.size() < 50)) &&
+             (!('gender' in data) || (data.gender is string && data.gender.size() < 50)) &&
+             (!('ethnicity' in data) || (data.ethnicity is string && data.ethnicity.size() < 100)) &&
+             (!('spedStatus' in data) || (data.spedStatus is string && data.spedStatus.size() < 50)) &&
+             (!('ellStatus' in data) || (data.ellStatus is string && data.ellStatus.size() < 50)) &&
+             (!('section504' in data) || (data.section504 is string && data.section504.size() < 50)) &&
+             (!('lastUpdated' in data) || (data.lastUpdated is string && data.lastUpdated.size() < 50));
+    }
+
+    function isValidAssessment(data) {
+      return hasRequiredFields(['stn', 'type', 'date']) &&
+             data.stn is string && data.stn.size() > 0 && data.stn.size() < 50 &&
+             data.type is string && data.type.size() > 0 && data.type.size() < 100 &&
+             data.date is string && data.date.size() < 50 &&
+             (!('subject' in data) || (data.subject is string && data.subject.size() < 100)) &&
+             (!('score' in data) || data.score is number) &&
+             (!('proficiency' in data) || (data.proficiency is string && data.proficiency.size() < 100)) &&
+             (!('details' in data) || (data.details is string && data.details.size() < 1048576)) &&
+             (!('fileName' in data) || (data.fileName is string && data.fileName.size() < 200));
+    }
+
+    function isValidAuditLog(data) {
+      return hasRequiredFields(['stn', 'date', 'action', 'userId']) &&
+             data.stn is string && data.stn.size() > 0 && data.stn.size() < 50 &&
+             data.date is string && data.date.size() < 50 &&
+             data.action is string && data.action.size() > 0 && data.action.size() < 200 &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() < 100 &&
+             (!('details' in data) || (data.details is string && data.details.size() < 1048576));
+    }
+
+    function isValidNote(data) {
+      return hasRequiredFields(['stn', 'date', 'authorId', 'content', 'type']) &&
+             data.stn is string && data.stn.size() > 0 && data.stn.size() < 50 &&
+             data.date is string && data.date.size() < 50 &&
+             data.authorId is string && data.authorId == request.auth.uid &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 10000 &&
+             data.type in ['Teacher Note', 'Admin Note', 'AI Summary'] &&
+             (!('authorName' in data) || (data.authorName is string && data.authorName.size() < 100)) &&
+             (!('role' in data) || (data.role is string && data.role.size() < 50));
+    }
+
+    function isValidUploadLog(data) {
+      return hasRequiredFields(['fileName', 'uploadType', 'date', 'userId', 'recordCount']) &&
+             data.fileName is string && data.fileName.size() > 0 && data.fileName.size() < 200 &&
+             data.uploadType is string && data.uploadType.size() > 0 && data.uploadType.size() < 100 &&
+             data.date is string && data.date.size() < 50 &&
+             data.userId is string && data.userId.size() > 0 && data.userId.size() < 100 &&
+             data.recordCount is number;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isStaff();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || (userId == request.auth.uid && request.resource.data.role == 'teacher'));
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && isAdmin();
+    }
+
+    match /students/{stn} {
+      allow read: if isStaff();
+      allow create: if isAdmin() && isValidStudent(request.resource.data);
+      allow update: if isAdmin() && isValidStudent(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /assessments/{assessmentId} {
+      allow read: if isStaff();
+      allow create: if isAdmin() && isValidAssessment(request.resource.data);
+      allow update: if isAdmin() && isValidAssessment(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isStaff();
+      allow create: if isAdmin() && isValidAuditLog(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /notes/{noteId} {
+      allow read: if isStaff();
+      allow create: if isStaff() && isValidNote(request.resource.data);
+      allow update: if isStaff() && isValidNote(request.resource.data) && resource.data.authorId == request.auth.uid;
+      allow delete: if isAdmin();
+    }
+
+    match /upload_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && isValidUploadLog(request.resource.data);
+      allow delete: if isAdmin();
+    }
+  }
+}
