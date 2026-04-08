@@ -101,7 +101,13 @@ export default function StudentProfile() {
 
     if (a.type === 'IXL' || (a.fileName && a.fileName.includes('IXL'))) {
       if (typeof dateStr === 'string') {
-        dateStr = dateStr.replace(/\s*\(.*?\)\s*/g, '').trim();
+        // Just remove the parenthesis characters
+        dateStr = dateStr.replace(/[()]/g, '').trim();
+        // Try to extract just the date part (e.g. MM/DD/YYYY or YYYY-MM-DD)
+        const dateMatch = dateStr.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/);
+        if (dateMatch) {
+          dateStr = dateMatch[1];
+        }
       }
     }
 
