@@ -12,7 +12,7 @@ export default function Layout() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-lgs-bg">
         <div className="max-w-md w-full p-8 bg-white rounded-xl shadow-sm border border-slate-100 text-center">
-          <h1 className="text-2xl font-bold text-lgs-blue mb-2">Liberty Grove Schools</h1>
+          <h1 className="text-2xl font-bold text-lgs-blue mb-2">LGS Pathways Studio</h1>
           <p className="text-slate-500 mb-8">Sign in to access the Impact Platform</p>
           <button
             onClick={() => signIn()}
@@ -39,7 +39,10 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className="w-64 bg-lgs-blue text-white flex flex-col shadow-xl z-10">
         <div className="p-6 border-b border-lgs-blue-dark">
-          <h1 className="text-xl font-bold tracking-tight">LIBERTY GROVE</h1>
+          <div className="flex items-center gap-2 mb-2">
+            <img src="/logo.png" alt="LGS Logo" className="w-8 h-8 object-contain bg-white rounded p-1" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+            <h1 className="text-xl font-bold tracking-tight leading-tight">LGS Pathways<br/>Studio</h1>
+          </div>
           <p className="text-sm text-lgs-blue-light font-medium">Impact Platform</p>
         </div>
         

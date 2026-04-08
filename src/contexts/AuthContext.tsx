@@ -33,22 +33,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (currentUser) {
         try {
           const userDocRef = doc(db, 'users', currentUser.uid);
-          const userDoc = await getDoc(userDocRef);
+          let userDoc;
+          try {
+            userDoc = await getDoc(userDocRef);
+          } catch (e) {
+            handleFirestoreError(e, OperationType.GET, 'users');
+            return;
+          }
+          
           if (userDoc.exists()) {
-            setRole(userDoc.data().role);
+            const isDefaultAdmin = currentUser.email === 'bunzueta@gmail.com' && currentUser.emailVerified;
+            setRole(isDefaultAdmin ? 'admin' : userDoc.data().role);
           } else {
             // Default to teacher if not found, or admin if it's the default admin email
             const isDefaultAdmin = currentUser.email === 'bunzueta@gmail.com' && currentUser.emailVerified;
             const newRole = isDefaultAdmin ? 'admin' : 'teacher';
-            await setDoc(userDocRef, {
-              email: currentUser.email,
-              role: newRole,
-              name: currentUser.displayName || ''
-            });
+            try {
+              await setDoc(userDocRef, {
+                email: currentUser.email,
+                role: newRole,
+                name: currentUser.displayName || ''
+              });
+            } catch (e) {
+              handleFirestoreError(e, OperationType.WRITE, 'users');
+              return;
+            }
             setRole(newRole);
           }
         } catch (error) {
-          handleFirestoreError(error, OperationType.GET, 'users');
+          console.error("Unexpected error in AuthContext", error);
         }
       } else {
         setRole(null);

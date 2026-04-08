@@ -71,13 +71,13 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-         (request.auth.token.email == "bunzueta@gmail.com" && request.auth.token.email_verified == true));
+        (request.auth.uid == "TQmqldF9LmRESyZNWJwFXlsfY103" || request.auth.token.email == "bunzueta@gmail.com" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
     }
 
     function isTeacher() {
       return isAuthenticated() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
     }
 
     function isStaff() {
@@ -155,7 +155,7 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isStaff();
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isStaff());
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || (userId == request.auth.uid && request.resource.data.role == 'teacher'));
       allow update: if isAuthenticated() && isValidUser(request.resource.data) && isAdmin();
     }

@@ -704,6 +704,10 @@ export default function StudentProfile() {
                 <span className="text-slate-500 font-medium">Last Updated</span>
                 <span className="col-span-2 text-slate-900">{student.lastUpdated ? new Date(student.lastUpdated).toLocaleString() : 'N/A'}</span>
               </div>
+              <div className="grid grid-cols-3 pt-2">
+                <span className="text-slate-500 font-medium">Source File</span>
+                <span className="col-span-2 text-slate-900">{student.fileName || 'Unknown'}</span>
+              </div>
             </div>
             <div className="mt-6 flex justify-end">
               <button onClick={() => setShowDemographics(false)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">

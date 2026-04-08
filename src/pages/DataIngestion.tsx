@@ -103,7 +103,8 @@ export default function DataIngestion() {
                       section504: getVal(row, ['504']) || '',
                       tier: 'Pending',
                       tierStatus: 'Pending',
-                      lastUpdated: new Date().toISOString()
+                      lastUpdated: new Date().toISOString(),
+                      fileName: currentFile.name
                     }, { merge: true });
                   } else {
                     // Assessment data
