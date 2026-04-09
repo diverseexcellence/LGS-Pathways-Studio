@@ -4,10 +4,33 @@ import { doc, getDoc, collection, query, where, getDocs, orderBy, updateDoc, add
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { handleFirestoreError, OperationType } from '../lib/utils';
-import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, FileJson, Trash2, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, FileJson, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+const MTSS_STRATEGIES: Record<string, string[]> = {
+  "Tier 1": [
+    "Differentiated Core Instruction",
+    "Universal Behavior Support (PBIS)",
+    "Flexible Grouping",
+    "Standard Accommodations"
+  ],
+  "Tier 2": [
+    "Small Group Targeted Reading Intervention",
+    "Small Group Targeted Math Intervention",
+    "Check-In/Check-Out (CICO) Behavior Support",
+    "Social Skills Group",
+    "Bi-weekly Progress Monitoring"
+  ],
+  "Tier 3": [
+    "Intensive 1:1 Reading Intervention",
+    "Intensive 1:1 Math Intervention",
+    "Individualized Behavior Intervention Plan (BIP)",
+    "Weekly Progress Monitoring",
+    "Wrap-around Services"
+  ]
+};
 
 export default function StudentProfile() {
   const { stn } = useParams<{ stn: string }>();
@@ -16,8 +39,11 @@ export default function StudentProfile() {
   const [assessments, setAssessments] = useState<any[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [learningPlans, setLearningPlans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [newNote, setNewNote] = useState('');
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [newPlan, setNewPlan] = useState({ tier: 'Tier 1', strategy: '', customDetails: '', frequency: 'Weekly' });
   const [isGeneratingTier, setIsGeneratingTier] = useState(false);
   const [overrideTier, setOverrideTier] = useState('');
   const [showDemographics, setShowDemographics] = useState(false);
@@ -54,6 +80,11 @@ export default function StudentProfile() {
       const qLogs = query(collection(db, 'audit_logs'), where('stn', '==', stn));
       const logsSnapshot = await getDocs(qLogs);
       setAuditLogs(logsSnapshot.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+
+      // Fetch learning plans
+      const qPlans = query(collection(db, 'learning_plans'), where('stn', '==', stn));
+      const plansSnapshot = await getDocs(qPlans);
+      setLearningPlans(plansSnapshot.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
 
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, 'student_data');
@@ -329,7 +360,18 @@ export default function StudentProfile() {
         aiSummaryText = response.text?.trim() || '';
       } catch (aiError: any) {
         console.error("AI Summary Generation Error", aiError);
-        alert("Tier recommendation was generated, but the AI Summary failed to generate: " + (aiError.message || "Unknown error"));
+        let errorMessage = "Unknown error";
+        const errorString = typeof aiError === 'string' ? aiError : JSON.stringify(aiError) + (aiError.message || '');
+        
+        if (errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED') || errorString.includes('quota')) {
+          errorMessage = "AI Rate limit exceeded. Please try again later.";
+          aiSummaryText = "AI Summary could not be generated due to API rate limits. Please try again later.";
+        } else {
+          errorMessage = aiError.message || "Unknown error";
+          aiSummaryText = "AI Summary generation failed.";
+        }
+        
+        alert("Tier recommendation was generated, but the AI Summary failed: " + errorMessage);
       }
 
       if (recommendedTier) {
@@ -413,6 +455,53 @@ export default function StudentProfile() {
       fetchStudentData();
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'notes');
+    }
+  };
+
+  const handleAddPlan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPlan.strategy) return;
+    try {
+      const planData = {
+        stn: stn!,
+        ...newPlan,
+        status: 'Active',
+        createdAt: new Date().toISOString(),
+        createdBy: user?.email || 'Unknown'
+      };
+      const docRef = await addDoc(collection(db, 'learning_plans'), planData);
+      setLearningPlans([{ id: docRef.id, ...planData }, ...learningPlans]);
+      setShowPlanModal(false);
+      setNewPlan({ tier: student?.tier && ['Tier 1', 'Tier 2', 'Tier 3'].includes(student.tier) ? student.tier : 'Tier 1', strategy: '', customDetails: '', frequency: 'Weekly' });
+      
+      await addDoc(collection(db, 'audit_logs'), {
+        stn: stn!,
+        date: new Date().toISOString(),
+        action: 'Learning Plan Created',
+        userId: user?.uid || 'Unknown',
+        details: `Created ${newPlan.tier} plan: ${newPlan.strategy}`
+      });
+      fetchStudentData();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'learning_plans');
+    }
+  };
+
+  const handleUpdatePlanStatus = async (planId: string, newStatus: string) => {
+    try {
+      await updateDoc(doc(db, 'learning_plans', planId), { status: newStatus });
+      setLearningPlans(learningPlans.map(p => p.id === planId ? { ...p, status: newStatus } : p));
+      
+      await addDoc(collection(db, 'audit_logs'), {
+        stn: stn!,
+        date: new Date().toISOString(),
+        action: 'Learning Plan Status Updated',
+        userId: user?.uid,
+        details: `Updated plan status to ${newStatus}`
+      });
+      fetchStudentData();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'learning_plans');
     }
   };
 
@@ -644,6 +733,62 @@ export default function StudentProfile() {
                     })}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+
+          {/* Learning Plans Section */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2">
+                <ClipboardList className="w-5 h-5 text-lgs-red" />
+                Learning Plans (MTSS/RTI)
+              </h2>
+              <button onClick={() => {
+                const validTier = student?.tier && ['Tier 1', 'Tier 2', 'Tier 3'].includes(student.tier) ? student.tier : 'Tier 1';
+                setNewPlan({ ...newPlan, tier: validTier, strategy: '' });
+                setShowPlanModal(true);
+              }} className="flex items-center gap-1 px-3 py-1.5 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark transition-colors">
+                <Plus className="w-4 h-4" />
+                Add Plan
+              </button>
+            </div>
+            {learningPlans.length === 0 ? (
+              <p className="text-slate-500 text-sm">No active learning plans.</p>
+            ) : (
+              <div className="space-y-3">
+                {learningPlans.map(plan => (
+                  <div key={plan.id} className="p-4 rounded-lg border border-slate-100 bg-slate-50">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            plan.tier === 'Tier 1' ? 'bg-green-100 text-green-700' :
+                            plan.tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>{plan.tier}</span>
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            plan.status === 'Active' ? 'bg-blue-100 text-blue-700' :
+                            plan.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                            'bg-slate-200 text-slate-700'
+                          }`}>{plan.status}</span>
+                        </div>
+                        <h3 className="font-semibold text-slate-900">{plan.strategy}</h3>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xs text-slate-500 block">Freq: {plan.frequency}</span>
+                        <span className="text-xs text-slate-400 block">{new Date(plan.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    {plan.customDetails && <p className="text-sm text-slate-600 mt-2">{plan.customDetails}</p>}
+                    {plan.status === 'Active' && (
+                      <div className="mt-3 flex gap-2">
+                        <button onClick={() => handleUpdatePlanStatus(plan.id, 'Completed')} className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100 font-medium transition-colors">Mark Completed</button>
+                        <button onClick={() => handleUpdatePlanStatus(plan.id, 'Discontinued')} className="text-xs px-2 py-1 bg-slate-200 text-slate-700 rounded hover:bg-slate-300 font-medium transition-colors">Discontinue</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -880,6 +1025,77 @@ export default function StudentProfile() {
           </div>
         </div>
       )}
+      {/* Learning Plan Modal */}
+      {showPlanModal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-lg w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-slate-900">Create Learning Plan</h3>
+              <button onClick={() => setShowPlanModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleAddPlan} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Target Tier</label>
+                <select 
+                  value={newPlan.tier} 
+                  onChange={(e) => {
+                    setNewPlan({ ...newPlan, tier: e.target.value, strategy: '' });
+                  }}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lgs-blue outline-none"
+                >
+                  <option value="Tier 1">Tier 1</option>
+                  <option value="Tier 2">Tier 2</option>
+                  <option value="Tier 3">Tier 3</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">MTSS/RTI Strategy</label>
+                <select 
+                  required
+                  value={newPlan.strategy} 
+                  onChange={(e) => setNewPlan({ ...newPlan, strategy: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lgs-blue outline-none"
+                >
+                  <option value="">Select a strategy...</option>
+                  {(MTSS_STRATEGIES[newPlan.tier] || []).map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Frequency</label>
+                <select 
+                  value={newPlan.frequency} 
+                  onChange={(e) => setNewPlan({ ...newPlan, frequency: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lgs-blue outline-none"
+                >
+                  <option value="Daily">Daily</option>
+                  <option value="Weekly">Weekly</option>
+                  <option value="Bi-weekly">Bi-weekly</option>
+                  <option value="Monthly">Monthly</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Custom Details / Goals (Optional)</label>
+                <textarea 
+                  value={newPlan.customDetails}
+                  onChange={(e) => setNewPlan({ ...newPlan, customDetails: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lgs-blue outline-none"
+                  rows={3}
+                  placeholder="Specific goals, materials, or notes..."
+                ></textarea>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={() => setShowPlanModal(false)} className="px-4 py-2 text-slate-700 font-medium hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-lgs-blue text-white font-medium hover:bg-lgs-blue-dark rounded-lg transition-colors">Create Plan</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

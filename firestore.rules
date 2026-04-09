@@ -71,7 +71,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (request.auth.uid == "TQmqldF9LmRESyZNWJwFXlsfY103" || request.auth.token.email == "bunzueta@gmail.com" ||
+        (request.auth.uid == 'TQmqldF9LmRESyZNWJwFXlsfY103' || 
+         (request.auth.token != null && (request.auth.token.email == 'bunzueta@gmail.com' || request.auth.token.email.lower() == 'lgsadmin@lgs.local')) ||
          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
     }
 
@@ -123,11 +124,11 @@ service cloud.firestore {
 
     function isValidAuditLog(data) {
       return hasRequiredFields(['stn', 'date', 'action', 'userId']) &&
-             data.stn is string && data.stn.size() > 0 && data.stn.size() < 50 &&
-             data.date is string && data.date.size() < 50 &&
-             data.action is string && data.action.size() > 0 && data.action.size() < 200 &&
-             data.userId is string && data.userId.size() > 0 && data.userId.size() < 100 &&
-             (!('details' in data) || (data.details is string && data.details.size() < 1048576));
+             data.stn is string &&
+             data.date is string &&
+             data.action is string &&
+             data.userId is string &&
+             (!('details' in data) || data.details is string);
     }
 
     function isValidNote(data) {
@@ -148,6 +149,18 @@ service cloud.firestore {
              data.date is string && data.date.size() < 50 &&
              data.userId is string && data.userId.size() > 0 && data.userId.size() < 100 &&
              data.recordCount is number;
+    }
+
+    function isValidLearningPlan(data) {
+      return hasRequiredFields(['stn', 'tier', 'strategy', 'frequency', 'status', 'createdAt', 'createdBy']) &&
+             data.stn is string &&
+             data.tier is string &&
+             data.strategy is string &&
+             data.frequency is string &&
+             data.status is string &&
+             data.createdAt is string &&
+             data.createdBy is string &&
+             (!('customDetails' in data) || data.customDetails is string);
     }
 
     // ===============================================================
@@ -176,7 +189,7 @@ service cloud.firestore {
 
     match /audit_logs/{logId} {
       allow read: if isStaff();
-      allow create: if isAdmin() && isValidAuditLog(request.resource.data);
+      allow create: if isStaff();
       allow delete: if isAdmin();
     }
 
@@ -190,6 +203,13 @@ service cloud.firestore {
     match /upload_logs/{logId} {
       allow read: if isAdmin();
       allow create: if isAdmin() && isValidUploadLog(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /learning_plans/{planId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update: if isStaff();
       allow delete: if isAdmin();
     }
   }

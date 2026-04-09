@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { handleFirestoreError, OperationType } from '../lib/utils';
@@ -9,6 +9,8 @@ interface AuthContextType {
   role: 'admin' | 'teacher' | null;
   loading: boolean;
   signIn: () => Promise<void>;
+  signInWithEmail: (email: string, pass: string) => Promise<void>;
+  signUpWithEmail: (email: string, pass: string, role?: 'admin' | 'teacher') => Promise<void>;
   logOut: () => Promise<void>;
 }
 
@@ -17,6 +19,8 @@ const AuthContext = createContext<AuthContextType>({
   role: null,
   loading: true,
   signIn: async () => {},
+  signInWithEmail: async () => {},
+  signUpWithEmail: async () => {},
   logOut: async () => {},
 });
 
@@ -42,17 +46,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
           
           if (userDoc.exists()) {
-            const isDefaultAdmin = currentUser.email === 'bunzueta@gmail.com' && currentUser.emailVerified;
+            const isDefaultAdmin = (currentUser.email === 'bunzueta@gmail.com' && currentUser.emailVerified) || currentUser.email?.toLowerCase() === 'lgsadmin@lgs.local';
             setRole(isDefaultAdmin ? 'admin' : userDoc.data().role);
           } else {
             // Default to teacher if not found, or admin if it's the default admin email
-            const isDefaultAdmin = currentUser.email === 'bunzueta@gmail.com' && currentUser.emailVerified;
+            const isDefaultAdmin = (currentUser.email === 'bunzueta@gmail.com' && currentUser.emailVerified) || currentUser.email?.toLowerCase() === 'lgsadmin@lgs.local';
             const newRole = isDefaultAdmin ? 'admin' : 'teacher';
             try {
               await setDoc(userDocRef, {
                 email: currentUser.email,
                 role: newRole,
-                name: currentUser.displayName || ''
+                name: currentUser.displayName || currentUser.email?.split('@')[0] || ''
               });
             } catch (e) {
               handleFirestoreError(e, OperationType.WRITE, 'users');
@@ -81,12 +85,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const signInWithEmail = async (email: string, pass: string) => {
+    await signInWithEmailAndPassword(auth, email, pass);
+  };
+
+  const signUpWithEmail = async (email: string, pass: string, assignedRole: 'admin' | 'teacher' = 'teacher') => {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+    const userDocRef = doc(db, 'users', userCredential.user.uid);
+    await setDoc(userDocRef, {
+      email: email,
+      role: assignedRole,
+      name: email.split('@')[0]
+    });
+  };
+
   const logOut = async () => {
     await signOut(auth);
   };
 
   return (
-    <AuthContext.Provider value={{ user, role, loading, signIn, logOut }}>
+    <AuthContext.Provider value={{ user, role, loading, signIn, signInWithEmail, signUpWithEmail, logOut }}>
       {children}
     </AuthContext.Provider>
   );
