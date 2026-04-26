@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus" },
+    "environment": { "value": "prod" },
+    "jwtSecret": { "value": "REPLACE-WITH-32-CHAR-SECRET-IN-KEYVAULT" },
+    "sqlAdminPassword": { "value": "REPLACE-WITH-STRONG-SQL-PASSWORD" },
+    "ollamaBaseUrl": { "value": "http://YOUR-OLLAMA-HOST:11434" }
+  }
+}

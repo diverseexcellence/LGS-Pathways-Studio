@@ -1,0 +1,349 @@
+using Microsoft.Azure.Cosmos;
+using Microsoft.Azure.Cosmos.Linq;
+using LgsImpact.Api.Models;
+
+namespace LgsImpact.Api.Services;
+
+public interface ICosmosDbService
+{
+    // Admins
+    Task<AdminDocument?> GetAdminByEmailAsync(string email);
+    Task UpsertAdminAsync(AdminDocument admin);
+
+    // Students
+    Task<StudentDocument?> GetStudentAsync(string studentId);
+    Task<(List<StudentDocument> Items, int Total)> ListStudentsAsync(int page, int pageSize, string? search, string? classGroup, bool activeOnly = true);
+    Task UpsertStudentAsync(StudentDocument student);
+    Task<StudentDocument?> FindStudentByNameAndDobAsync(string fullName, string dob);
+
+    // Assessments
+    Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null);
+    Task CreateAssessmentAsync(AssessmentDocument assessment);
+    Task DeleteAssessmentsByFileNameAsync(string fileName);
+
+    // AI Summaries
+    Task<AiSummaryDocument?> GetLatestSummaryAsync(string studentId);
+    Task CreateSummaryAsync(AiSummaryDocument summary);
+
+    // Upload Logs
+    Task<List<UploadLogDocument>> GetUploadLogsAsync();
+    Task CreateUploadLogAsync(UploadLogDocument log);
+    Task<UploadLogDocument?> GetUploadLogAsync(string id);
+    Task DeleteUploadLogAsync(string id, string uploadedBy);
+
+    // Export Logs
+    Task CreateExportLogAsync(ExportLogDocument log);
+
+    // Audit Logs
+    Task CreateAuditLogAsync(AuditLogDocument log);
+    Task<(List<AuditLogDocument> Items, int Total)> GetAuditLogsAsync(int page, int pageSize, string? eventType);
+
+    // Seed admins if container is empty
+    Task SeedAdminsIfEmptyAsync();
+}
+
+public class CosmosDbService : ICosmosDbService
+{
+    private readonly CosmosClient _client;
+    private readonly string _databaseId;
+
+    private Container Admins => _client.GetContainer(_databaseId, "admins");
+    private Container Students => _client.GetContainer(_databaseId, "students");
+    private Container Assessments => _client.GetContainer(_databaseId, "assessments");
+    private Container AiSummaries => _client.GetContainer(_databaseId, "ai-summaries");
+    private Container UploadLogs => _client.GetContainer(_databaseId, "upload-logs");
+    private Container ExportLogs => _client.GetContainer(_databaseId, "export-logs");
+    private Container AuditLogs => _client.GetContainer(_databaseId, "audit-logs");
+
+    public CosmosDbService(IConfiguration config)
+    {
+        var endpoint = config["Cosmos:Endpoint"]
+            ?? throw new InvalidOperationException("Cosmos:Endpoint not configured");
+        var key = config["Cosmos:Key"]
+            ?? throw new InvalidOperationException("Cosmos:Key not configured");
+        _databaseId = config["Cosmos:DatabaseId"] ?? "lgs-impact";
+
+        _client = new CosmosClient(endpoint, key, new CosmosClientOptions
+        {
+            SerializerOptions = new CosmosSerializationOptions
+            {
+                PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+            }
+        });
+    }
+
+    // ─── Admins ──────────────────────────────────────────────────────────────
+
+    public async Task<AdminDocument?> GetAdminByEmailAsync(string email)
+    {
+        var query = Admins.GetItemLinqQueryable<AdminDocument>()
+            .Where(a => a.Email == email && a.IsActive)
+            .ToFeedIterator();
+
+        while (query.HasMoreResults)
+        {
+            var page = await query.ReadNextAsync();
+            var item = page.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
+
+    public async Task UpsertAdminAsync(AdminDocument admin)
+        => await Admins.UpsertItemAsync(admin, new PartitionKey(admin.Email));
+
+    // ─── Students ────────────────────────────────────────────────────────────
+
+    public async Task<StudentDocument?> GetStudentAsync(string studentId)
+    {
+        var query = Students.GetItemLinqQueryable<StudentDocument>()
+            .Where(s => s.StudentId == studentId)
+            .ToFeedIterator();
+
+        while (query.HasMoreResults)
+        {
+            var page = await query.ReadNextAsync();
+            var item = page.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
+
+    public async Task<(List<StudentDocument> Items, int Total)> ListStudentsAsync(
+        int page, int pageSize, string? search, string? classGroup, bool activeOnly = true)
+    {
+        var queryable = Students.GetItemLinqQueryable<StudentDocument>().AsQueryable();
+
+        if (activeOnly) queryable = queryable.Where(s => s.IsActive);
+        if (!string.IsNullOrWhiteSpace(classGroup)) queryable = queryable.Where(s => s.ClassGroup == classGroup);
+
+        // Fetch all matching (Cosmos LINQ doesn't support Skip/Take with Count in one query)
+        var allItems = new List<StudentDocument>();
+        var iterator = queryable.ToFeedIterator();
+        while (iterator.HasMoreResults)
+        {
+            var pg = await iterator.ReadNextAsync();
+            allItems.AddRange(pg);
+        }
+
+        // Apply search filter in memory (Cosmos free-text search requires Search API)
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.ToLowerInvariant();
+            allItems = allItems.Where(x =>
+                x.FullName.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                x.ClassGroup.Contains(s, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        allItems = allItems.OrderBy(s => s.FullName).ToList();
+        var total = allItems.Count;
+        var items = allItems.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+        return (items, total);
+    }
+
+    public async Task UpsertStudentAsync(StudentDocument student)
+        => await Students.UpsertItemAsync(student, new PartitionKey(student.ClassGroup));
+
+    public async Task<StudentDocument?> FindStudentByNameAndDobAsync(string fullName, string dob)
+    {
+        var query = Students.GetItemLinqQueryable<StudentDocument>()
+            .Where(s => s.FullName == fullName && s.Dob == dob)
+            .ToFeedIterator();
+
+        while (query.HasMoreResults)
+        {
+            var page = await query.ReadNextAsync();
+            var item = page.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
+
+    // ─── Assessments ─────────────────────────────────────────────────────────
+
+    public async Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null)
+    {
+        var q = Assessments.GetItemLinqQueryable<AssessmentDocument>()
+            .Where(a => a.StudentId == studentId);
+
+        if (!string.IsNullOrWhiteSpace(subject))
+            q = q.Where(a => a.Subject == subject);
+
+        var items = new List<AssessmentDocument>();
+        var iter = q.ToFeedIterator();
+        while (iter.HasMoreResults)
+        {
+            var pg = await iter.ReadNextAsync();
+            items.AddRange(pg);
+        }
+        return items.OrderByDescending(a => a.Date).ToList();
+    }
+
+    public async Task CreateAssessmentAsync(AssessmentDocument assessment)
+        => await Assessments.CreateItemAsync(assessment, new PartitionKey(assessment.StudentId));
+
+    public async Task DeleteAssessmentsByFileNameAsync(string fileName)
+    {
+        var q = Assessments.GetItemLinqQueryable<AssessmentDocument>()
+            .Where(a => a.FileName == fileName)
+            .ToFeedIterator();
+
+        var toDelete = new List<AssessmentDocument>();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            toDelete.AddRange(pg);
+        }
+
+        foreach (var item in toDelete)
+            await Assessments.DeleteItemAsync<AssessmentDocument>(item.Id, new PartitionKey(item.StudentId));
+    }
+
+    // ─── AI Summaries ─────────────────────────────────────────────────────────
+
+    public async Task<AiSummaryDocument?> GetLatestSummaryAsync(string studentId)
+    {
+        var items = new List<AiSummaryDocument>();
+        var q = AiSummaries.GetItemLinqQueryable<AiSummaryDocument>()
+            .Where(s => s.StudentId == studentId)
+            .ToFeedIterator();
+
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            items.AddRange(pg);
+        }
+        return items.OrderByDescending(s => s.GeneratedAt).FirstOrDefault();
+    }
+
+    public async Task CreateSummaryAsync(AiSummaryDocument summary)
+        => await AiSummaries.CreateItemAsync(summary, new PartitionKey(summary.StudentId));
+
+    // ─── Upload Logs ─────────────────────────────────────────────────────────
+
+    public async Task<List<UploadLogDocument>> GetUploadLogsAsync()
+    {
+        var items = new List<UploadLogDocument>();
+        var q = UploadLogs.GetItemLinqQueryable<UploadLogDocument>().ToFeedIterator();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            items.AddRange(pg);
+        }
+        return items.OrderByDescending(l => l.UploadedAt).ToList();
+    }
+
+    public async Task CreateUploadLogAsync(UploadLogDocument log)
+        => await UploadLogs.CreateItemAsync(log, new PartitionKey(log.UploadedBy));
+
+    public async Task<UploadLogDocument?> GetUploadLogAsync(string id)
+    {
+        var q = UploadLogs.GetItemLinqQueryable<UploadLogDocument>()
+            .Where(l => l.Id == id)
+            .ToFeedIterator();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            var item = pg.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
+
+    public async Task DeleteUploadLogAsync(string id, string uploadedBy)
+        => await UploadLogs.DeleteItemAsync<UploadLogDocument>(id, new PartitionKey(uploadedBy));
+
+    // ─── Export Logs ─────────────────────────────────────────────────────────
+
+    public async Task CreateExportLogAsync(ExportLogDocument log)
+        => await ExportLogs.CreateItemAsync(log, new PartitionKey(log.ExportedBy));
+
+    // ─── Audit Logs ──────────────────────────────────────────────────────────
+
+    public async Task CreateAuditLogAsync(AuditLogDocument log)
+        => await AuditLogs.CreateItemAsync(log, new PartitionKey(log.AdminEmail));
+
+    public async Task<(List<AuditLogDocument> Items, int Total)> GetAuditLogsAsync(
+        int page, int pageSize, string? eventType)
+    {
+        var queryable = AuditLogs.GetItemLinqQueryable<AuditLogDocument>().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(eventType))
+            queryable = queryable.Where(l => l.EventType == eventType);
+
+        var all = new List<AuditLogDocument>();
+        var iter = queryable.ToFeedIterator();
+        while (iter.HasMoreResults)
+        {
+            var pg = await iter.ReadNextAsync();
+            all.AddRange(pg);
+        }
+
+        all = all.OrderByDescending(l => l.Timestamp).ToList();
+        var total = all.Count;
+        var items = all.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        return (items, total);
+    }
+
+    // ─── Seed ────────────────────────────────────────────────────────────────
+
+    public async Task SeedAdminsIfEmptyAsync()
+    {
+        var q = Admins.GetItemLinqQueryable<AdminDocument>().ToFeedIterator();
+        var any = false;
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            if (pg.Any()) { any = true; break; }
+        }
+        if (any) return;
+
+        var admins = new[]
+        {
+            new AdminDocument
+            {
+                Id   = "admin-1",
+                AdminId = 1,
+                Email = "velvet@lgs.local",
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Ch@ng3Me!Velvet"),
+                Name  = "Velvet",
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow.ToString("o")
+            },
+            new AdminDocument
+            {
+                Id   = "admin-2",
+                AdminId = 2,
+                Email = "maurice@lgs.local",
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Ch@ng3Me!Maurice"),
+                Name  = "Maurice",
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow.ToString("o")
+            }
+        };
+
+        foreach (var admin in admins)
+            await Admins.CreateItemAsync(admin, new PartitionKey(admin.Email));
+    }
+
+    // ─── Ensure containers exist ──────────────────────────────────────────────
+    public static async Task EnsureDatabaseAndContainersAsync(CosmosClient client, string databaseId)
+    {
+        var db = await client.CreateDatabaseIfNotExistsAsync(databaseId);
+
+        var containers = new[]
+        {
+            ("admins",       "/email"),
+            ("students",     "/classGroup"),
+            ("assessments",  "/studentId"),
+            ("ai-summaries", "/studentId"),
+            ("upload-logs",  "/uploadedBy"),
+            ("export-logs",  "/exportedBy"),
+            ("audit-logs",   "/adminEmail"),
+        };
+
+        foreach (var (name, partitionKey) in containers)
+            await db.Database.CreateContainerIfNotExistsAsync(name, partitionKey);
+    }
+}

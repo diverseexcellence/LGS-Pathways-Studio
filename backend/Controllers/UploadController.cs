@@ -1,0 +1,245 @@
+using LgsImpact.Api.Models;
+using LgsImpact.Api.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using CsvHelper;
+using System.Globalization;
+using OfficeOpenXml;
+
+namespace LgsImpact.Api.Controllers;
+
+[ApiController]
+[Route("api/upload")]
+[Authorize]
+public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit) : ControllerBase
+{
+    private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
+    private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
+
+    [HttpPost]
+    [RequestSizeLimit(20_000_000)]
+    public async Task<IActionResult> Upload(IFormFile file, [FromForm] string uploadType, CancellationToken ct)
+    {
+        if (file is null || file.Length == 0) return BadRequest(new { message = "No file provided" });
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (ext is not ".csv" and not ".xlsx") return BadRequest(new { message = "Only .csv and .xlsx files accepted" });
+
+        List<Dictionary<string, string>> rows;
+        try { rows = ext == ".csv" ? await ParseCsvAsync(file, ct) : ParseXlsx(file); }
+        catch (Exception ex) { return BadRequest(new { message = $"Parse error: {ex.Message}" }); }
+
+        string? blobUrl = null;
+        try
+        {
+            using var stream = file.OpenReadStream();
+            var blobName = await blob.UploadAsync(stream, file.FileName, file.ContentType, ct);
+            blobUrl = await blob.GetSasUrlAsync(blobName);
+        }
+        catch { /* optional in dev */ }
+
+        var result = await ProcessRowsAsync(rows, uploadType, file.FileName, ct);
+
+        await cosmos.CreateUploadLogAsync(new UploadLogDocument
+        {
+            Id          = Guid.NewGuid().ToString(),
+            UploadedBy  = CurrentAdminEmail,
+            FileName    = file.FileName,
+            UploadType  = uploadType,
+            UploadedAt  = DateTime.UtcNow.ToString("o"),
+            RecordCount = result.ImportedRows,
+            SkippedCount = result.SkippedRows,
+            Errors      = result.Errors,
+            BlobUrl     = blobUrl
+        });
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Upload, entityType: "Upload", entityId: file.FileName,
+            details: $"Uploaded {file.FileName} ({uploadType}) — {result.ImportedRows} rows, {result.SkippedRows} skipped",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(result);
+    }
+
+    [HttpGet("logs")]
+    public async Task<IActionResult> Logs()
+    {
+        var logs = await cosmos.GetUploadLogsAsync();
+        return Ok(logs);
+    }
+
+    [HttpDelete("logs/{id}")]
+    public async Task<IActionResult> DeleteLog(string id)
+    {
+        var log = await cosmos.GetUploadLogAsync(id);
+        if (log is null) return NotFound();
+
+        await cosmos.DeleteAssessmentsByFileNameAsync(log.FileName);
+        await cosmos.DeleteUploadLogAsync(id, log.UploadedBy);
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Delete, entityType: "UploadLog", entityId: id,
+            details: $"Deleted upload log: {log.FileName}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return NoContent();
+    }
+
+    private async Task<ParseSummaryDto> ProcessRowsAsync(
+        List<Dictionary<string, string>> rows, string uploadType, string fileName, CancellationToken ct)
+    {
+        int imported = 0, skipped = 0;
+        var errors = new List<string>();
+
+        foreach (var row in rows)
+        {
+            try
+            {
+                var name = GetVal(row, "FullName", "Full Name", "Name", "Student Name");
+                if (string.IsNullOrWhiteSpace(name)) { skipped++; continue; }
+
+                if (uploadType == "demographics")
+                {
+                    var dob = GetVal(row, "DOB", "Date of Birth", "Birth Date") ?? "";
+                    var existing = await cosmos.FindStudentByNameAndDobAsync(name, dob);
+                    if (existing is not null) { skipped++; continue; }
+
+                    var studentId = $"s-{Guid.NewGuid():N}";
+                    await cosmos.UpsertStudentAsync(new StudentDocument
+                    {
+                        Id         = studentId,
+                        StudentId  = studentId,
+                        FullName   = name,
+                        Dob        = dob,
+                        ClassGroup = GetVal(row, "Class", "ClassGroup", "Class Group", "Home_Room", "Homeroom") ?? "Unassigned",
+                        Grade      = GetVal(row, "Grade", "Grade_Level", "Enrolled Grade")?.TrimStart('0'),
+                        Gender     = GetVal(row, "Gender"),
+                        Ethnicity  = GetVal(row, "Ethnicity", "Race"),
+                        EllStatus  = GetVal(row, "ELL", "English Learner"),
+                        SpedStatus = GetVal(row, "SPED", "Special Education"),
+                        Section504 = GetVal(row, "504"),
+                        HomeRoom   = GetVal(row, "HomeRoom", "Home Room", "Home_Room"),
+                        SourceFile = fileName,
+                        Tier       = "Pending",
+                        TierStatus = "Pending",
+                        EnrolDate  = DateTime.UtcNow.ToString("o"),
+                        LastUpdated = DateTime.UtcNow.ToString("o")
+                    });
+                }
+                else
+                {
+                    // Assessment — match student by name
+                    var (allStudents, _) = await cosmos.ListStudentsAsync(1, 1000, name, null);
+                    var student = allStudents.FirstOrDefault(s =>
+                        s.FullName.Equals(name, StringComparison.OrdinalIgnoreCase) && s.IsActive);
+
+                    if (student is null) { skipped++; continue; }
+
+                    var scoreRaw = GetVal(row, "Score", "Scale Score", "Overall Score", "Diagnostic level", "SmartScore");
+                    double.TryParse(scoreRaw, out var score);
+
+                    var subject = GetVal(row, "Subject", "Content Area") ?? DetectSubject(uploadType, fileName);
+                    var proficiency = GetVal(row, "Proficiency Level", "Performance Level", "Status", "Achievement Level");
+                    var period = GetVal(row, "Period", "Term", "School Year");
+                    var date = GetVal(row, "Date", "Date Taken", "Date of completion", "Test Date");
+
+                    await cosmos.CreateAssessmentAsync(new AssessmentDocument
+                    {
+                        Id         = Guid.NewGuid().ToString(),
+                        StudentId  = student.StudentId,
+                        UploadType = uploadType,
+                        FileName   = fileName,
+                        UploadedAt = DateTime.UtcNow.ToString("o"),
+                        Subject    = NormalizeSubject(subject),
+                        Score      = score > 0 ? score : null,
+                        Proficiency = proficiency,
+                        Period     = period,
+                        Date       = date,
+                        RawFields  = row  // entire row saved as-is — schema free
+                    });
+                }
+
+                imported++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Row error: {ex.Message}");
+                skipped++;
+            }
+        }
+
+        return new ParseSummaryDto(rows.Count, imported, skipped, errors);
+    }
+
+    private static string DetectSubject(string uploadType, string fileName)
+    {
+        if (uploadType.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("English", StringComparison.OrdinalIgnoreCase)) return "ELA";
+        if (uploadType.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
+        return "Mixed";
+    }
+
+    private static string NormalizeSubject(string? subject)
+    {
+        if (subject is null) return "Mixed";
+        if (subject.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
+            subject.Contains("English", StringComparison.OrdinalIgnoreCase) ||
+            subject.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
+        if (subject.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
+        return subject;
+    }
+
+    private static string? GetVal(Dictionary<string, string> row, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (row.TryGetValue(key, out var val) && !string.IsNullOrWhiteSpace(val)) return val.Trim();
+            var match = row.Keys.FirstOrDefault(k =>
+                k.EndsWith("." + key, StringComparison.OrdinalIgnoreCase) ||
+                k.Contains(key, StringComparison.OrdinalIgnoreCase));
+            if (match is not null && !string.IsNullOrWhiteSpace(row[match])) return row[match].Trim();
+        }
+        return null;
+    }
+
+    private static async Task<List<Dictionary<string, string>>> ParseCsvAsync(IFormFile file, CancellationToken ct)
+    {
+        using var reader = new StreamReader(file.OpenReadStream());
+        using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
+        var rows = new List<Dictionary<string, string>>();
+        await csv.ReadAsync();
+        csv.ReadHeader();
+        while (await csv.ReadAsync())
+        {
+            var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var header in csv.HeaderRecord ?? [])
+                row[header] = csv.GetField(header) ?? "";
+            rows.Add(row);
+        }
+        return rows;
+    }
+
+    private static List<Dictionary<string, string>> ParseXlsx(IFormFile file)
+    {
+        using var package = new ExcelPackage(file.OpenReadStream());
+        var sheet = package.Workbook.Worksheets[0];
+        var rows = new List<Dictionary<string, string>>();
+        if (sheet.Dimension is null) return rows;
+
+        var headers = Enumerable.Range(1, sheet.Dimension.Columns)
+            .Select(c => sheet.Cells[1, c].Text.Trim()).ToArray();
+
+        for (int r = 2; r <= sheet.Dimension.Rows; r++)
+        {
+            var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (int c = 1; c <= headers.Length; c++)
+                row[headers[c - 1]] = sheet.Cells[r, c].Text.Trim();
+            rows.Add(row);
+        }
+        return rows;
+    }
+
+    public record ParseSummaryDto(int TotalRows, int ImportedRows, int SkippedRows, List<string> Errors);
+}
