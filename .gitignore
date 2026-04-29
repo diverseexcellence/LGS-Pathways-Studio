@@ -74,3 +74,14 @@ $RECYCLE.BIN/
 # Azure Functions / publish
 local.settings.json
 
+# Backend build/publish outputs
+backend/publish/
+backend/publish_linux/
+backend/publish.zip
+backend/deploy.zip
+
+# Claude Code settings
+.claude/settings.json
+
+# Docs
+*.md
