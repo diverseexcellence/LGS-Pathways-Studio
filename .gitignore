@@ -83,5 +83,6 @@ backend/deploy.zip
 # Claude Code settings
 .claude/settings.json
 
-# Docs
-*.md
+# Docs (exclude root-level md files; allow docs/ folder)
+/*.md
+DEV_SETUP.md
