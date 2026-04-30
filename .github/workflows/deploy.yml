@@ -36,13 +36,25 @@ jobs:
       - name: Publish
         run: dotnet publish -c Release -r linux-x64 --self-contained false -o ./publish
 
-      - name: Deploy to Azure Web App
+      - name: Deploy to staging slot
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ secrets.AZURE_BACKEND_APP_NAME }}
-          publish-profile: ${{ secrets.AZURE_BACKEND_PUBLISH_PROFILE }}
+          slot-name: staging
+          publish-profile: ${{ secrets.AZURE_BACKEND_STAGING_PUBLISH_PROFILE }}
           package: backend/publish
+
+      - name: Swap staging → production
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az webapp deployment slot swap \
+              --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+              --name ${{ secrets.AZURE_BACKEND_APP_NAME }} \
+              --slot staging \
+              --target-slot production
 
   # ─── Frontend ───────────────────────────────────────────────────────────────
   frontend:

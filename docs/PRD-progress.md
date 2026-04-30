@@ -3,7 +3,7 @@
 **Source:** Meeting Transcript (April 9, 2026)  
 **Total Tasks:** 48 | **Total Estimated Hours:** 200h  
 **Stack:** React 19 + Vite + TypeScript | .NET 8 Web API | Azure Cosmos DB | Azure App Service  
-**Last Updated:** 2026-04-30
+**Last Updated:** 2026-04-30 (tasks 2, 5, 6 completed)
 
 ---
 
@@ -20,14 +20,14 @@
 | # | Task | Details | Est. | Status | Notes |
 |---|------|---------|------|--------|-------|
 | 1 | Resource Group & App Service (React SPA) | React hosting, custom domain, HTTPS enforced, managed certificate | 3h | ⚠️ Partial | Static Web App `web-lgsi-dev` deployed. Custom domain and managed cert not configured. |
-| 2 | App Service (.NET 8 API backend) | API hosting, managed identity enabled, health checks, deployment slots | 3h | ⚠️ Partial | `api-lgsi-dev` deployed, managed identity enabled. Health check path and staging slot not configured. |
+| 2 | App Service (.NET 8 API backend) | API hosting, managed identity enabled, health checks, deployment slots | 3h | ✅ Done | `api-lgsi-dev` deployed, managed identity enabled, `healthCheckPath: '/health'` configured, staging slot added to `main.bicep`. CI/CD deploys to staging then swaps to production. |
 | 3 | Azure SQL Database provisioning | TDE enabled, firewall rules (App Service IPs only), TLS 1.2 minimum | 3h | 🚫 N/A | Architecture changed to Cosmos DB (serverless). SQL module exists in `infra/modules/azure-sql.bicep` but not deployed. Confirm with stakeholders if SQL is still required. |
 | 4 | Azure Blob Storage for file uploads | Private container, managed identity access, no public anonymous access | 2h | ✅ Done | `stlgsidev` deployed. Private `uploads` container, `allowBlobPublicAccess: false`, HTTPS enforced. Note: managed identity access not wired — using connection string via Key Vault. |
-| 5 | Azure Key Vault integration | Store connection strings, Gemini API key, JWT key; managed identity access | 3h | ⚠️ Partial | `kv-lgs-sna-mvp-dev` created by admin. CosmosKey, JwtSecret, StorageConnectionString stored. Key Vault access policy for App Service managed identity still needs to be applied (`az keyvault set-policy`). |
-| 6 | Application Insights & monitoring | Performance monitoring, PII telemetry scrubber, alerting, dashboards | 2h | ❌ Not Done | Module exists at `infra/modules/app-insights.bicep` and `log-analytics.bicep` but not wired into `main.bicep`. No alerts or dashboards configured. |
-| 7 | CI/CD Pipeline (GitHub Actions) | Build React + .NET 8; deploy to App Service; environment gates | 3h | ⚠️ Partial | `.github/workflows/deploy.yml` deploys backend (linux-x64) and frontend on push to main. No staging slot, no environment gates (manual approval before prod). |
+| 5 | Azure Key Vault integration | Store connection strings, Gemini API key, JWT key; managed identity access | 3h | ✅ Done | `kv-lgs-sna-mvp-dev` created. CosmosKey, JwtSecret, StorageConnectionString stored. Key Vault access policy (`get`, `list`) for App Service managed identity now provisioned via Bicep `kvAccessPolicy` resource. |
+| 6 | Application Insights & monitoring | Performance monitoring, PII telemetry scrubber, alerting, dashboards | 2h | ✅ Done | Log Analytics workspace (`log-lgsi-dev`) and App Insights (`appi-lgsi-dev`) deployed in `main.bicep`. `APPLICATIONINSIGHTS_CONNECTION_STRING` injected into backend app settings. `PiiTelemetryInitializer` strips student IDs and emails from all telemetry. Note: alerting rules and dashboards not yet configured in portal. |
+| 7 | CI/CD Pipeline (GitHub Actions) | Build React + .NET 8; deploy to App Service; environment gates | 3h | ⚠️ Partial | Deploys backend (linux-x64) to staging slot then swaps to production. Frontend deploys to Static Web App. No manual approval gate yet (requires GitHub Environments with required reviewers). |
 
-**Infra: ~8h done / ~11h remaining**
+**Infra: ~16h done / ~3h remaining** (custom domain + manual approval gate only)
 
 ---
 
@@ -39,12 +39,12 @@
 | 9 | Encryption at rest & in transit | Verify TDE on SQL, TLS 1.2+, HTTPS-only App Service, HSTS headers | 3h | ⚠️ Partial | HTTPS-only and TLS 1.2 enforced on App Service and Storage. No TDE (no SQL). HSTS headers not added to .NET API responses. |
 | 10 | Dynamic Data Masking on Azure SQL | DDM rules on all Tier 1/2 PII columns; UNMASK for App Service identity | 10h | 🚫 N/A | SQL not used. Cosmos DB has no DDM equivalent. Needs stakeholder decision on Cosmos-level access strategy. |
 | 11 | PII redaction before AI calls | .NET PiiRedactionService; tokenize student identity; strip all PII from prompts | 10h | ✅ Done | `backend/Services/PiiRedactionService.cs` implemented. |
-| 12 | App Insights PII scrubber | Telemetry initializer strips PII from dependency logs | 2h | ❌ Not Done | App Insights not deployed. Telemetry initializer not written. |
+| 12 | App Insights PII scrubber | Telemetry initializer strips PII from dependency logs | 2h | ✅ Done | `PiiTelemetryInitializer.cs` scrubs student IDs from URL paths and email addresses from all telemetry types. Registered in `Program.cs`. |
 | 13 | Audit logging middleware | .NET middleware logging all PII-access endpoints; user, action, timestamp, IP | 6h | ⚠️ Partial | `AuditService.cs` and `AuditController.cs` exist. Middleware not wired to all PII-access endpoints automatically. |
 | 14 | Export watermarking | ClosedXML header/footer with user name, timestamp, confidentiality notice | 4h | ❌ Not Done | `ExportController.cs` exports data but no watermark, confidentiality notice, or user attribution in Excel output. |
 | 15 | Basic auth (MVP — no SSO) | JWT-based login for admin users; hashed credentials in DB | 5h | ✅ Done | `AuthController.cs`, `TokenService.cs`, BCrypt hashing, JWT wired in `Program.cs`. |
 
-**PII/Security: ~15h done / ~27h remaining** *(excl. 10h DDM — architecture decision pending)*
+**PII/Security: ~17h done / ~25h remaining** *(excl. 10h DDM — architecture decision pending)*
 
 ---
 

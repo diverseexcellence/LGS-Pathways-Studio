@@ -1,5 +1,7 @@
 using System.Text;
 using LgsImpact.Api.Services;
+using Microsoft.ApplicationInsights.Channel;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
 using Microsoft.IdentityModel.Tokens;
@@ -8,6 +10,10 @@ using OfficeOpenXml;
 var builder = WebApplication.CreateBuilder(args);
 
 ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+
+// ─── Application Insights ────────────────────────────────────────────────────
+builder.Services.AddApplicationInsightsTelemetry();
+builder.Services.AddSingleton<ITelemetryInitializer, PiiTelemetryInitializer>();
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
