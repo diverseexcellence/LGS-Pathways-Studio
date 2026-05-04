@@ -9,6 +9,9 @@ on:
 env:
   DOTNET_VERSION: '8.0.x'
   NODE_VERSION: '20.x'
+  BACKEND_APP_NAME: 'api-lgsi-dev'
+  RESOURCE_GROUP: 'rg-lgs-sna-mvp-dev'
+  FRONTEND_APP_NAME: 'web-lgsi-dev'
 
 jobs:
   # ─── Backend ────────────────────────────────────────────────────────────────
@@ -36,25 +39,13 @@ jobs:
       - name: Publish
         run: dotnet publish -c Release -r linux-x64 --self-contained false -o ./publish
 
-      - name: Deploy to staging slot
+      - name: Deploy to api-lgsi-dev
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ secrets.AZURE_BACKEND_APP_NAME }}
-          slot-name: staging
-          publish-profile: ${{ secrets.AZURE_BACKEND_STAGING_PUBLISH_PROFILE }}
-          package: backend/publish
-
-      - name: Swap staging → production
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: azure/CLI@v2
-        with:
-          inlineScript: |
-            az webapp deployment slot swap \
-              --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-              --name ${{ secrets.AZURE_BACKEND_APP_NAME }} \
-              --slot staging \
-              --target-slot production
+          app-name: ${{ env.BACKEND_APP_NAME }}
+          publish-profile: ${{ secrets.AZURE_BACKEND_PUBLISH_PROFILE }}
+          package: ./publish
 
   # ─── Frontend ───────────────────────────────────────────────────────────────
   frontend:
@@ -78,7 +69,7 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: npm run build
 
-      - name: Deploy to Azure Static Web Apps
+      - name: Deploy to web-lgsi-dev
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: Azure/static-web-apps-deploy@v1
         with:

@@ -5,6 +5,6 @@
     "location": { "value": "eastus" },
     "environment": { "value": "prod" },
     "appPrefix": { "value": "lgsi" },
-    "jwtSecret": { "reference": { "keyVault": { "id": "" }, "secretName": "JwtSecret" } }
+    "jwtSecret": { "reference": { "keyVault": { "id": "/subscriptions/aa20fbcc-b192-475b-a92f-e9b2b39a8d91/resourceGroups/rg-lgs-sna-mvp-dev/providers/Microsoft.KeyVault/vaults/kv-lgs-sna-mvp-dev" }, "secretName": "JwtSecret" } }
   }
 }
