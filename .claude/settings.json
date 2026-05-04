@@ -11,15 +11,7 @@
       "Bash(xargs cat *)",
       "Bash(dotnet remove *)",
       "Bash(python3 -c ' *)",
-      "Bash(node -e ' *)",
-      "Bash(az vm *)",
-      "Bash(powershell.exe -Command \"az vm list-skus --location eastus --resource-type serverfarms --output table\")",
-      "Bash(powershell.exe -Command \"az account show\")",
-      "Bash(powershell.exe -Command \"& 'C:\\\\Program Files \\(x86\\)\\\\Microsoft SDKs\\\\Azure\\\\CLI2\\\\wbin\\\\az.cmd' vm list-skus --location eastus --resource-type serverfarms --output table\")",
-      "Bash(cmd.exe /c \"az vm list-skus --location eastus --resource-type serverfarms --output json\")",
-      "Bash(cmd.exe /c \"az vm list-skus --location eastus --resource-type serverfarms --output json 2>&1\")",
-      "Bash(cmd.exe /c \"az keyvault secret set --vault-name kv-lgs-sna-mvp-dev --name JwtSecret --value \\\\\"lgs-impact-jwt-secret-dev-2024-secure\\\\\" 2>&1\")",
-      "Bash(cmd.exe /c \"az keyvault secret set --vault-name kv-lgs-sna-mvp-dev --name JwtSecret --value \\\\\"lgs-impact-jwt-secret-dev-2024-secure\\\\\" && echo SUCCESS\")"
+      "Bash(node -e ' *)"
     ]
   }
 }
