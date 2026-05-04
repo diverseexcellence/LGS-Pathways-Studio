@@ -1,4 +1,5 @@
 using System.Text;
+using LgsImpact.Api.Middleware;
 using LgsImpact.Api.Services;
 using Microsoft.ApplicationInsights.Channel;
 using Microsoft.ApplicationInsights.Extensibility;
@@ -69,6 +70,12 @@ builder.Services.AddScoped<ILlmService, OllamaService>();
 builder.Services.AddScoped<IBlobStorageService, BlobStorageService>();
 builder.Services.AddHttpClient("ollama").SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
+builder.Services.AddHsts(options =>
+{
+    options.MaxAge = TimeSpan.FromDays(365);
+    options.IncludeSubDomains = true;
+});
+
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
 builder.Services.AddEndpointsApiExplorer();
@@ -114,8 +121,17 @@ app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "LGS Impact 
 
 app.UseCors();
 app.UseHttpsRedirection();
+app.UseHsts();
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    ctx.Response.Headers["X-Frame-Options"] = "DENY";
+    ctx.Response.Headers["Referrer-Policy"] = "no-referrer";
+    await next();
+});
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<PiiAuditMiddleware>();
 
 app.MapControllers();
 app.MapHealthChecks("/health");

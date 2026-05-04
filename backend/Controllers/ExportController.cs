@@ -23,31 +23,43 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
         ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
 
         var (students, _) = await cosmos.ListStudentsAsync(1, 10000, null, null);
+        var adminName = User.FindFirstValue("name") ?? CurrentAdminEmail;
+        var exportedAt = DateTime.UtcNow;
 
         using var package = new ExcelPackage();
         var ws = package.Workbook.Worksheets.Add("Students");
 
-        ws.Cells[1, 1].Value = $"LGS Impact Export — Confidential — Generated {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC";
+        // Row 1 — confidentiality banner
+        ws.Cells[1, 1].Value = "CONFIDENTIAL — FOR AUTHORISED LGS STAFF USE ONLY — DO NOT DISTRIBUTE";
         ws.Cells[1, 1, 1, 10].Merge = true;
         ws.Cells[1, 1].Style.Font.Bold = true;
-        ws.Cells[1, 1].Style.Font.Color.SetColor(Color.DarkRed);
+        ws.Cells[1, 1].Style.Font.Color.SetColor(Color.White);
         ws.Cells[1, 1].Style.Fill.PatternType = ExcelFillStyle.Solid;
-        ws.Cells[1, 1].Style.Fill.BackgroundColor.SetColor(Color.LightYellow);
+        ws.Cells[1, 1].Style.Fill.BackgroundColor.SetColor(Color.DarkRed);
+        ws.Cells[1, 1].Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+
+        // Row 2 — watermark: who exported and when
+        ws.Cells[2, 1].Value = $"Exported by: {adminName} ({CurrentAdminEmail})  |  Date: {exportedAt:yyyy-MM-dd HH:mm} UTC  |  Records: {students.Count}";
+        ws.Cells[2, 1, 2, 10].Merge = true;
+        ws.Cells[2, 1].Style.Font.Italic = true;
+        ws.Cells[2, 1].Style.Font.Color.SetColor(Color.DarkRed);
+        ws.Cells[2, 1].Style.Fill.PatternType = ExcelFillStyle.Solid;
+        ws.Cells[2, 1].Style.Fill.BackgroundColor.SetColor(Color.LightYellow);
 
         string[] headers = ["ID", "Full Name", "DOB", "Class", "Grade", "Gender", "Ethnicity", "ELL", "Tier", "Tier Status"];
         for (int i = 0; i < headers.Length; i++)
         {
-            ws.Cells[2, i + 1].Value = headers[i];
-            ws.Cells[2, i + 1].Style.Font.Bold = true;
-            ws.Cells[2, i + 1].Style.Fill.PatternType = ExcelFillStyle.Solid;
-            ws.Cells[2, i + 1].Style.Fill.BackgroundColor.SetColor(Color.FromArgb(0x21, 0x49, 0x65));
-            ws.Cells[2, i + 1].Style.Font.Color.SetColor(Color.White);
+            ws.Cells[3, i + 1].Value = headers[i];
+            ws.Cells[3, i + 1].Style.Font.Bold = true;
+            ws.Cells[3, i + 1].Style.Fill.PatternType = ExcelFillStyle.Solid;
+            ws.Cells[3, i + 1].Style.Fill.BackgroundColor.SetColor(Color.FromArgb(0x21, 0x49, 0x65));
+            ws.Cells[3, i + 1].Style.Font.Color.SetColor(Color.White);
         }
 
         for (int r = 0; r < students.Count; r++)
         {
             var s = students[r];
-            int row = r + 3;
+            int row = r + 4;
             ws.Cells[row, 1].Value  = s.StudentId;
             ws.Cells[row, 2].Value  = s.FullName;
             ws.Cells[row, 3].Value  = s.Dob;

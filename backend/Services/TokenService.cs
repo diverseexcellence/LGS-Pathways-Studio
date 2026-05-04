@@ -26,6 +26,7 @@ public class TokenService(IConfiguration config) : ITokenService
             new Claim(JwtRegisteredClaimNames.Email, admin.Email),
             new Claim("name", admin.Name),
             new Claim("adminId", admin.AdminId.ToString()),
+            new Claim("superAdmin", admin.IsSuperAdmin.ToString().ToLower()),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 

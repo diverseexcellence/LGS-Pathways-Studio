@@ -217,6 +217,9 @@ public class AdminDocument
     [JsonProperty("isActive")]
     public bool IsActive { get; set; } = true;
 
+    [JsonProperty("isSuperAdmin")]
+    public bool IsSuperAdmin { get; set; } = false;
+
     [JsonProperty("lastLogin")]
     public string? LastLogin { get; set; }
 

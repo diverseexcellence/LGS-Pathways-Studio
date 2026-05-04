@@ -12,7 +12,7 @@ namespace LgsImpact.Api.Controllers;
 [ApiController]
 [Route("api/upload")]
 [Authorize]
-public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit) : ControllerBase
+public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction) : ControllerBase
 {
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
@@ -155,7 +155,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         Proficiency = proficiency,
                         Period     = period,
                         Date       = date,
-                        RawFields  = row  // entire row saved as-is — schema free
+                        RawFields  = piiRedaction.RedactRawFields(row)
                     });
                 }
 
