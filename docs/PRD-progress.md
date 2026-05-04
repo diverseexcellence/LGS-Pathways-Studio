@@ -3,7 +3,7 @@
 **Source:** Meeting Transcript (April 9, 2026)  
 **Total Tasks:** 48 | **Total Estimated Hours:** 200h  
 **Stack:** React 19 + Vite + TypeScript | .NET 8 Web API | Azure Cosmos DB | Azure App Service  
-**Last Updated:** 2026-04-30 (tasks 2, 5, 6 completed)
+**Last Updated:** 2026-05-04 (open decisions resolved)
 
 ---
 
@@ -21,7 +21,7 @@
 |---|------|---------|------|--------|-------|
 | 1 | Resource Group & App Service (React SPA) | React hosting, custom domain, HTTPS enforced, managed certificate | 3h | ⚠️ Partial | Static Web App `web-lgsi-dev` deployed. Custom domain and managed cert not configured. |
 | 2 | App Service (.NET 8 API backend) | API hosting, managed identity enabled, health checks, deployment slots | 3h | ✅ Done | `api-lgsi-dev` deployed, managed identity enabled, `healthCheckPath: '/health'` configured, staging slot added to `main.bicep`. CI/CD deploys to staging then swaps to production. |
-| 3 | Azure SQL Database provisioning | TDE enabled, firewall rules (App Service IPs only), TLS 1.2 minimum | 3h | 🚫 N/A | Architecture changed to Cosmos DB (serverless). SQL module exists in `infra/modules/azure-sql.bicep` but not deployed. Confirm with stakeholders if SQL is still required. |
+| 3 | Azure SQL Database provisioning | TDE enabled, firewall rules (App Service IPs only), TLS 1.2 minimum | 3h | 🚫 N/A | Cosmos DB confirmed as canonical. SQL out of scope for MVP. |
 | 4 | Azure Blob Storage for file uploads | Private container, managed identity access, no public anonymous access | 2h | ✅ Done | `stlgsidev` deployed. Private `uploads` container, `allowBlobPublicAccess: false`, HTTPS enforced. Note: managed identity access not wired — using connection string via Key Vault. |
 | 5 | Azure Key Vault integration | Store connection strings, Gemini API key, JWT key; managed identity access | 3h | ✅ Done | `kv-lgs-sna-mvp-dev` created. CosmosKey, JwtSecret, StorageConnectionString stored. Key Vault access policy (`get`, `list`) for App Service managed identity now provisioned via Bicep `kvAccessPolicy` resource. |
 | 6 | Application Insights & monitoring | Performance monitoring, PII telemetry scrubber, alerting, dashboards | 2h | ✅ Done | Log Analytics workspace (`log-lgsi-dev`) and App Insights (`appi-lgsi-dev`) deployed in `main.bicep`. `APPLICATIONINSIGHTS_CONNECTION_STRING` injected into backend app settings. `PiiTelemetryInitializer` strips student IDs and emails from all telemetry. Note: alerting rules and dashboards not yet configured in portal. |
@@ -37,7 +37,7 @@
 |---|------|---------|------|--------|-------|
 | 8 | PII field inventory & data classification | 12 PII fields classified into 3 sensitivity tiers; data flow mapping | 6h | ❌ Not Done | No classification document or data flow map exists. |
 | 9 | Encryption at rest & in transit | Verify TDE on SQL, TLS 1.2+, HTTPS-only App Service, HSTS headers | 3h | ⚠️ Partial | HTTPS-only and TLS 1.2 enforced on App Service and Storage. No TDE (no SQL). HSTS headers not added to .NET API responses. |
-| 10 | Dynamic Data Masking on Azure SQL | DDM rules on all Tier 1/2 PII columns; UNMASK for App Service identity | 10h | 🚫 N/A | SQL not used. Cosmos DB has no DDM equivalent. Needs stakeholder decision on Cosmos-level access strategy. |
+| 10 | Dynamic Data Masking on Azure SQL | DDM rules on all Tier 1/2 PII columns; UNMASK for App Service identity | 10h | 🚫 N/A | SQL out of scope. Cosmos DB managed identity access control is the confirmed strategy. |
 | 11 | PII redaction before AI calls | .NET PiiRedactionService; tokenize student identity; strip all PII from prompts | 10h | ✅ Done | `backend/Services/PiiRedactionService.cs` implemented. |
 | 12 | App Insights PII scrubber | Telemetry initializer strips PII from dependency logs | 2h | ✅ Done | `PiiTelemetryInitializer.cs` scrubs student IDs from URL paths and email addresses from all telemetry types. Registered in `Program.cs`. |
 | 13 | Audit logging middleware | .NET middleware logging all PII-access endpoints; user, action, timestamp, IP | 6h | ⚠️ Partial | `AuditService.cs` and `AuditController.cs` exist. Middleware not wired to all PII-access endpoints automatically. |
@@ -163,9 +163,9 @@
 
 ---
 
-## Open Decisions Required
+## Resolved Decisions
 
-1. **SQL vs Cosmos DB** — Plan specified Azure SQL (TDE, DDM). Project uses Cosmos DB. Confirm which is canonical for MVP. If Cosmos stays, DDM (10h) needs a replacement access-control strategy.
-2. **Custom domain** — A domain name is needed before task #1 can be completed.
-3. **Gemini vs Ollama** — Plan says Gemini for AI. Current backend uses Ollama (local). Confirm which AI provider for production.
-4. **Key Vault access policy** — One `az keyvault set-policy` command pending to grant App Service managed identity access to Key Vault secrets.
+1. ✅ **SQL vs Cosmos DB** — **Cosmos DB is canonical.** Task #3 (SQL provisioning) and #10 (DDM) remain N/A. No replacement DDM strategy needed — Cosmos DB access control via managed identity is sufficient.
+2. ✅ **Custom domain** — **Not required.** Task #1 custom domain/cert work is out of scope for MVP.
+3. ✅ **Gemini vs Ollama** — **Ollama confirmed for production.** Task #47 AI prompt refinement targets Ollama.
+4. ⏳ **Key Vault access policy** — Low priority, tackle last. One `az keyvault set-policy` command pending to grant App Service managed identity access to Key Vault secrets.
