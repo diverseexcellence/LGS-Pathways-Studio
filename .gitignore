@@ -81,7 +81,7 @@ backend/publish.zip
 backend/deploy.zip
 
 # Claude Code settings
-.claude/settings.json
+.claude/
 
 # Docs (exclude root-level md files; allow docs/ folder)
 /*.md
