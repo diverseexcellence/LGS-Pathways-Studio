@@ -104,6 +104,7 @@ export default function StudentsList() {
         });
         setTotalCount(result.total);
         params.successCallback(result.items, result.total);
+        gridRef.current?.api?.hideOverlay();
       } catch {
         params.failCallback();
       } finally {
@@ -151,7 +152,7 @@ export default function StudentsList() {
             Student Directory
           </h1>
           <p className="text-slate-500 mt-1 text-sm">
-            {totalCount > 0 ? `${totalCount.toLocaleString()} students` : 'Loading…'}
+            {isLoading && totalCount === 0 ? 'Loading…' : `${totalCount.toLocaleString()} students`}
           </p>
         </div>
         <button
