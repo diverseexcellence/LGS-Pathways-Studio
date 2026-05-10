@@ -14,6 +14,7 @@ public interface ICosmosDbService
     Task<StudentDocument?> GetStudentAsync(string studentId);
     Task<(List<StudentDocument> Items, int Total)> ListStudentsAsync(int page, int pageSize, string? search, string? classGroup, bool activeOnly = true);
     Task UpsertStudentAsync(StudentDocument student);
+    Task MoveStudentPartitionAsync(StudentDocument student, string oldClassGroup);
     Task<StudentDocument?> FindStudentByNameAndDobAsync(string fullName, string dob);
     Task<StudentDocument?> FindStudentByStnAsync(string stn);
     Task<StudentDocument?> FindStudentByLocalIdAsync(string localId);
@@ -150,6 +151,16 @@ public class CosmosDbService : ICosmosDbService
     public async Task UpsertStudentAsync(StudentDocument student)
         => await Students.UpsertItemAsync(student, new PartitionKey(student.ClassGroup));
 
+    public async Task MoveStudentPartitionAsync(StudentDocument student, string oldClassGroup)
+    {
+        if (!string.Equals(oldClassGroup, student.ClassGroup, StringComparison.Ordinal))
+        {
+            try { await Students.DeleteItemAsync<StudentDocument>(student.Id, new PartitionKey(oldClassGroup)); }
+            catch (CosmosException) { /* already gone */ }
+        }
+        await Students.UpsertItemAsync(student, new PartitionKey(student.ClassGroup));
+    }
+
     public async Task<StudentDocument?> FindStudentByNameAndDobAsync(string fullName, string dob)
     {
         var query = Students.GetItemLinqQueryable<StudentDocument>()
@@ -208,9 +219,35 @@ public class CosmosDbService : ICosmosDbService
             var pg = await q.ReadNextAsync();
             all.AddRange(pg);
         }
+        // Dedupe phantom cross-partition copies: same studentId in multiple partitions
+        // (caused by ClassGroup changing during enrichment without deleting the old record)
+        var partitionGroups = all.GroupBy(s => s.StudentId).Where(g => g.Count() > 1);
+        foreach (var pg in partitionGroups)
+        {
+            var copies = pg.OrderByDescending(s => s.Stn != null ? 1 : 0)
+                           .ThenByDescending(s => s.ClassGroup != "Unassigned" ? 1 : 0)
+                           .ThenByDescending(s => s.LastUpdated)
+                           .ToList();
+            var keep = copies.First();
+            foreach (var stale in copies.Skip(1))
+            {
+                try { await Students.DeleteItemAsync<StudentDocument>(stale.Id, new PartitionKey(stale.ClassGroup)); }
+                catch (CosmosException) { }
+            }
+        }
+        // Reload after phantom dedup
+        all = new List<StudentDocument>();
+        var q2 = Students.GetItemQueryIterator<StudentDocument>(
+            new QueryDefinition("SELECT * FROM c"),
+            requestOptions: new QueryRequestOptions { MaxItemCount = -1 });
+        while (q2.HasMoreResults)
+        {
+            var pg2 = await q2.ReadNextAsync();
+            all.AddRange(pg2);
+        }
         all = all.Where(s => s.IsActive).ToList();
 
-        // Group by normalized full name (case-insensitive)
+        // Group by normalized full name (case-insensitive) for true name duplicates
         var groups = all.GroupBy(s => s.FullName.Trim().ToLowerInvariant())
                         .Where(g => g.Count() > 1);
 

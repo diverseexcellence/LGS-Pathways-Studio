@@ -241,6 +241,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         existing.Dob        = dob.Length > 0 ? dob : existing.Dob;
                         existing.Stn        = stn ?? existing.Stn;
                         existing.LocalId    = localId ?? existing.LocalId;
+                        var oldClassGroup   = existing.ClassGroup;
                         existing.ClassGroup = GetVal(row, "Class", "ClassGroup", "Class Group",
                                                     "Home_Room", "Homeroom", "STUDENTS.Home_Room") ?? existing.ClassGroup;
                         existing.Grade      = GetVal(row, "Grade", "Grade_Level", "Enrolled Grade",
@@ -267,7 +268,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                                                       "Lunch Program", "Free/Reduced Lunch",
                                                       "STUDENTS.LunchStatus") ?? existing.LunchStatus;
                         existing.LastUpdated = DateTime.UtcNow.ToString("o");
-                        await cosmos.UpsertStudentAsync(existing);
+                        await cosmos.MoveStudentPartitionAsync(existing, oldClassGroup);
                         imported++;
                         continue;
                     }
