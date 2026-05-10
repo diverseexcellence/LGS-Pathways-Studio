@@ -8,7 +8,13 @@ public interface IBlobStorageService
 {
     Task<string> UploadAsync(Stream stream, string fileName, string contentType, CancellationToken ct = default);
     Task<string> GetSasUrlAsync(string blobName, int expiryMinutes = 60);
-    Task<List<(string Name, Stream Content)>> ListLandingZoneFilesAsync(CancellationToken ct = default);
+    Task<List<LandingZoneFile>> ListLandingZoneFilesAsync(CancellationToken ct = default);
+}
+
+public sealed class LandingZoneFile(string name, Stream content)
+{
+    public string Name { get; } = name;
+    public Stream Content { get; } = content;
 }
 
 public class BlobStorageService(IConfiguration config) : IBlobStorageService
@@ -46,14 +52,14 @@ public class BlobStorageService(IConfiguration config) : IBlobStorageService
         return await Task.FromResult(sasUri.ToString());
     }
 
-    public async Task<List<(string Name, Stream Content)>> ListLandingZoneFilesAsync(CancellationToken ct = default)
+    public async Task<List<LandingZoneFile>> ListLandingZoneFilesAsync(CancellationToken ct = default)
     {
         var connStr = config["LandingZone:ConnectionString"] ?? config["AzureBlob:ConnectionString"];
         if (string.IsNullOrEmpty(connStr))
             throw new InvalidOperationException("Landing zone connection string not configured. Set LandingZone:ConnectionString in App Service environment variables.");
 
         var landingZone = new BlobContainerClient(connStr, "landing-zone");
-        var results = new List<(string, Stream)>();
+        var results = new List<LandingZoneFile>();
 
         await foreach (var item in landingZone.GetBlobsAsync(cancellationToken: ct))
         {
@@ -64,7 +70,7 @@ public class BlobStorageService(IConfiguration config) : IBlobStorageService
             var ms = new MemoryStream();
             await blob.DownloadToAsync(ms, ct);
             ms.Position = 0;
-            results.Add((item.Name, ms));
+            results.Add(new LandingZoneFile(item.Name, ms));
         }
 
         return results;

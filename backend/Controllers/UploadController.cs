@@ -64,17 +64,19 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     [HttpPost("import-landing-zone")]
     public async Task<IActionResult> ImportLandingZone(CancellationToken ct)
     {
-        List<(string Name, Stream Content)> files;
+        List<LandingZoneFile> files;
         try { files = await blob.ListLandingZoneFilesAsync(ct); }
         catch (Exception ex) { return BadRequest(new { message = $"Could not access landing-zone: {ex.Message}" }); }
 
         if (files.Count == 0) return Ok(new { message = "No CSV or Excel files found in landing-zone.", results = Array.Empty<object>() });
 
         var results = new List<object>();
-        foreach (var (name, stream) in files)
+        foreach (var file in files)
         {
             try
             {
+                var name = file.Name;
+                var stream = file.Content;
                 var ext = Path.GetExtension(name).ToLowerInvariant();
                 var uploadType = DetectUploadType(name);
 
@@ -113,11 +115,11 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             }
             catch (Exception ex)
             {
-                results.Add(new { file = name, error = ex.Message });
+                results.Add(new { file = file.Name, error = ex.Message });
             }
             finally
             {
-                await stream.DisposeAsync();
+                await file.Content.DisposeAsync();
             }
         }
 
