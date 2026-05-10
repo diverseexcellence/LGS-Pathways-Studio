@@ -198,15 +198,16 @@ public class CosmosDbService : ICosmosDbService
 
     public async Task<int> DeduplicateStudentsAsync()
     {
-        // Fetch ALL students (no filter — Cosmos LINQ booleans are unreliable cross-partition)
+        // Use raw SQL cross-partition query — LINQ cross-partition has known silent-empty issues
         var all = new List<StudentDocument>();
-        var q = Students.GetItemLinqQueryable<StudentDocument>().ToFeedIterator();
+        var q = Students.GetItemQueryIterator<StudentDocument>(
+            new QueryDefinition("SELECT * FROM c"),
+            requestOptions: new QueryRequestOptions { MaxItemCount = -1 });
         while (q.HasMoreResults)
         {
             var pg = await q.ReadNextAsync();
             all.AddRange(pg);
         }
-        // Filter active in memory
         all = all.Where(s => s.IsActive).ToList();
 
         // Group by normalized full name (case-insensitive)
