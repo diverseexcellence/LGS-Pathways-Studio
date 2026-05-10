@@ -7,18 +7,19 @@ import 'ag-grid-community/styles/ag-theme-quartz.css';
 import { studentsApi, Student } from '../lib/api';
 import { Users, Search, RefreshCw } from 'lucide-react';
 
-const tierCellRenderer = (params: { value: string }) => {
-  const tier = params.value || '';
+const TierCell = ({ value }: { value: string }) => {
+  const tier = value || '';
   const cls =
     tier === 'Tier 1' ? 'bg-green-100 text-green-700' :
     tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700' :
     tier === 'Tier 3' ? 'bg-red-100 text-red-700' :
     'bg-slate-100 text-slate-600';
-  return `<span class="px-2 py-0.5 rounded-full text-xs font-medium ${cls}">${tier || 'Pending'}</span>`;
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{tier || 'Pending'}</span>;
 };
 
-const statusCellRenderer = (params: { value: boolean }) =>
-  `<span class="text-xs ${params.value ? 'text-green-600' : 'text-slate-400'}">${params.value ? 'Active' : 'Inactive'}</span>`;
+const StatusCell = ({ value }: { value: boolean }) => (
+  <span className={`text-xs ${value ? 'text-green-600' : 'text-slate-400'}`}>{value ? 'Active' : 'Inactive'}</span>
+);
 
 export default function StudentsList() {
   const navigate = useNavigate();
@@ -61,7 +62,7 @@ export default function StudentsList() {
       filter: true,
       flex: 1,
       minWidth: 100,
-      cellRenderer: (params: any) => tierCellRenderer(params),
+      cellRenderer: (params: any) => <TierCell value={params.value} />,
     },
     {
       field: 'isActive',
@@ -69,7 +70,7 @@ export default function StudentsList() {
       sortable: true,
       flex: 1,
       minWidth: 90,
-      cellRenderer: (params: any) => statusCellRenderer(params),
+      cellRenderer: (params: any) => <StatusCell value={params.value} />,
     },
     {
       headerName: 'Action',
@@ -78,8 +79,15 @@ export default function StudentsList() {
       sortable: false,
       filter: false,
       cellRenderer: (params: any) => {
-        if (!params.data) return '';
-        return `<button data-id="${params.data.studentId}" class="text-lgs-red hover:underline text-sm font-medium view-profile-btn">View Profile →</button>`;
+        if (!params.data) return null;
+        return (
+          <button
+            onClick={() => navigate(`/students/${params.data.studentId}`)}
+            className="text-lgs-red hover:underline text-sm font-medium"
+          >
+            View Profile →
+          </button>
+        );
       },
     },
   ];
@@ -129,18 +137,6 @@ export default function StudentsList() {
     if (gridApi) gridApi.setGridOption('datasource', datasource());
   };
 
-  // Handle row-level "View Profile" button clicks via event delegation
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const target = (e.target as HTMLElement).closest('.view-profile-btn') as HTMLElement | null;
-      if (target) {
-        const id = target.getAttribute('data-id');
-        if (id) navigate(`/students/${id}`);
-      }
-    };
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, [navigate]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
