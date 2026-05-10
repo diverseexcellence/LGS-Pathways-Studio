@@ -73,6 +73,9 @@ export interface Student {
   section504?: string;
   stn?: string;
   homeRoom?: string;
+  entryDate?: string;
+  exitDate?: string;
+  lunchStatus?: string;
   fileName?: string;
 }
 

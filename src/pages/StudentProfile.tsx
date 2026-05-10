@@ -65,6 +65,29 @@ function formatDate(d: string) {
   return d || 'N/A';
 }
 
+const ETHNICITY_MAP: Record<string, string> = {
+  '1': 'American Indian or Alaska Native',
+  '2': 'Asian',
+  '3': 'Black or African American',
+  '4': 'Hispanic or Latino',
+  '5': 'Native Hawaiian or Pacific Islander',
+  '6': 'White',
+  '7': 'Two or More Races',
+  'W': 'White',
+  'B': 'Black or African American',
+  'H': 'Hispanic or Latino',
+  'A': 'Asian',
+  'I': 'American Indian or Alaska Native',
+  'P': 'Native Hawaiian or Pacific Islander',
+  'M': 'Two or More Races',
+  'X': 'Two or More Races',
+};
+
+function translateEthnicity(code: string | undefined) {
+  if (!code || code === 'N/A') return 'N/A';
+  return ETHNICITY_MAP[code.trim().toUpperCase()] ?? ETHNICITY_MAP[code.trim()] ?? code;
+}
+
 function formatDisplayName(fullName: string) {
   if (!fullName) return fullName;
   const parts = fullName.trim().split(/\s+/);
@@ -220,7 +243,8 @@ export default function StudentProfile() {
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Grade: {student.grade || 'N/A'}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Class: {student.classGroup || 'N/A'}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Gender: {student.gender || 'N/A'}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Ethnicity: {student.ethnicity || 'N/A'}</span>
+              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Ethnicity: {translateEthnicity(student.ethnicity)}</span>
+              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">DOB: {student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A'}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Age: {calculateAge(student.dob)}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">EL: {toYesNo(student.ellStatus)}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Sp. Ed: {toYesNo(student.spedStatus)}</span>
@@ -407,10 +431,13 @@ export default function StudentProfile() {
                 ['Class Group', student.classGroup || 'N/A'],
                 ['Homeroom', student.homeRoom || 'N/A'],
                 ['Gender', student.gender || 'N/A'],
-                ['Ethnicity', student.ethnicity || 'N/A'],
+                ['Ethnicity', translateEthnicity(student.ethnicity)],
                 ['EL Status', toYesNo(student.ellStatus)],
                 ['Special Education', toYesNo(student.spedStatus)],
                 ['504 Status', toYesNo(student.section504, 'No')],
+                ['Lunch Status', student.lunchStatus || 'N/A'],
+                ['Entry Date', student.entryDate ? new Date(student.entryDate).toLocaleDateString() : 'N/A'],
+                ['Exit Date', student.exitDate ? new Date(student.exitDate).toLocaleDateString() : 'N/A'],
                 ['Enrolled', student.enrolDate ? new Date(student.enrolDate).toLocaleDateString() : 'N/A'],
                 ['Source File', student.fileName || 'Unknown'],
               ].map(([label, value]) => (

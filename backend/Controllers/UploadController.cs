@@ -257,8 +257,15 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         existing.Section504 = GetVal(row, "504", "Section 504", "Section 504 Status",
                                                     "S_STU_CRDC_X.section504_yn",
                                                     "U_STUDENT_CUSTOM_ALERT_INFO.alert_504") ?? existing.Section504;
-                        existing.HomeRoom   = GetVal(row, "HomeRoom", "Home Room", "Home_Room",
-                                                    "STUDENTS.Home_Room") ?? existing.HomeRoom;
+                        existing.HomeRoom    = GetVal(row, "HomeRoom", "Home Room", "Home_Room",
+                                                     "STUDENTS.Home_Room") ?? existing.HomeRoom;
+                        existing.EntryDate   = GetVal(row, "EntryDate", "Entry Date", "Entry_Date",
+                                                      "STUDENTS.EntryDate", "Enrollment Date") ?? existing.EntryDate;
+                        existing.ExitDate    = GetVal(row, "ExitDate", "Exit Date", "Exit_Date",
+                                                      "STUDENTS.ExitDate") ?? existing.ExitDate;
+                        existing.LunchStatus = GetVal(row, "LunchStatus", "Lunch Status", "Lunch_Status",
+                                                      "Lunch Program", "Free/Reduced Lunch",
+                                                      "STUDENTS.LunchStatus") ?? existing.LunchStatus;
                         existing.LastUpdated = DateTime.UtcNow.ToString("o");
                         await cosmos.UpsertStudentAsync(existing);
                         imported++;
@@ -293,8 +300,15 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         Section504 = GetVal(row, "504", "Section 504", "Section 504 Status",
                                            "S_STU_CRDC_X.section504_yn",
                                            "U_STUDENT_CUSTOM_ALERT_INFO.alert_504"),
-                        HomeRoom   = GetVal(row, "HomeRoom", "Home Room", "Home_Room",
-                                           "STUDENTS.Home_Room"),
+                        HomeRoom    = GetVal(row, "HomeRoom", "Home Room", "Home_Room",
+                                            "STUDENTS.Home_Room"),
+                        EntryDate   = GetVal(row, "EntryDate", "Entry Date", "Entry_Date",
+                                            "STUDENTS.EntryDate", "Enrollment Date"),
+                        ExitDate    = GetVal(row, "ExitDate", "Exit Date", "Exit_Date",
+                                            "STUDENTS.ExitDate"),
+                        LunchStatus = GetVal(row, "LunchStatus", "Lunch Status", "Lunch_Status",
+                                            "Lunch Program", "Free/Reduced Lunch",
+                                            "STUDENTS.LunchStatus"),
                         SourceFile = fileName,
                         Tier       = "Pending",
                         TierStatus = "Pending",

@@ -61,6 +61,15 @@ public class StudentDocument
     [JsonProperty("localId")]
     public string? LocalId { get; set; }
 
+    [JsonProperty("entryDate")]
+    public string? EntryDate { get; set; }
+
+    [JsonProperty("exitDate")]
+    public string? ExitDate { get; set; }
+
+    [JsonProperty("lunchStatus")]
+    public string? LunchStatus { get; set; }
+
     [JsonProperty("sourceFile")]
     public string? SourceFile { get; set; }
 }
