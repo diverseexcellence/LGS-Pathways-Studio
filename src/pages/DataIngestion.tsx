@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload } from 'lucide-react';
 import { uploadApi, exportApi, ParseSummary, UploadLog } from '../lib/api';
 
 const UPLOAD_TYPES = [
@@ -22,6 +22,8 @@ export default function DataIngestion() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResults, setImportResults] = useState<{ file: string; uploadType?: string; result?: ParseSummary; error?: string }[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -107,6 +109,23 @@ export default function DataIngestion() {
     } finally {
       setIsDeleting(false);
       setLogToDelete(null);
+    }
+  };
+
+  const handleImportLandingZone = async () => {
+    setIsImporting(true);
+    setImportResults(null);
+    setStatus(null);
+    try {
+      const res = await uploadApi.importLandingZone();
+      setImportResults(res.results);
+      const total = res.results.reduce((sum, r) => sum + (r.result?.importedRows ?? 0), 0);
+      setStatus({ type: 'success', message: `${res.message} ${total} record(s) imported.` });
+      await fetchLogs();
+    } catch (err: any) {
+      setStatus({ type: 'error', message: err.message || 'Import failed' });
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -236,6 +255,35 @@ export default function DataIngestion() {
           <Upload className="w-5 h-5" />
           {isUploading ? 'Uploading & Parsing…' : 'Upload Data'}
         </button>
+
+        <div className="border-t border-slate-200 pt-4">
+          <p className="text-xs text-slate-500 mb-3">
+            Or import all files already staged in the Azure <strong>landing-zone</strong> container.
+            Upload type is detected automatically from each filename.
+          </p>
+          <button
+            onClick={handleImportLandingZone}
+            disabled={isImporting}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
+          >
+            <CloudDownload className="w-5 h-5" />
+            {isImporting ? 'Importing from Landing Zone…' : 'Import from Landing Zone'}
+          </button>
+        </div>
+
+        {importResults && importResults.length > 0 && (
+          <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 text-sm space-y-2">
+            <p className="font-semibold text-slate-700">Landing Zone Import Results</p>
+            {importResults.map((r, i) => (
+              <div key={i} className={`rounded px-3 py-2 text-xs ${r.error ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-800'}`}>
+                <span className="font-medium">{r.file}</span>
+                {r.error
+                  ? ` — Error: ${r.error}`
+                  : ` (${r.uploadType}) — ${r.result?.importedRows ?? 0} imported, ${r.result?.skippedRows ?? 0} skipped`}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Status message */}
         {status && (

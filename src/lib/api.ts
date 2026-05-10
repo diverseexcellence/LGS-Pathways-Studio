@@ -186,6 +186,12 @@ export const uploadApi = {
   logs: () => request<UploadLog[]>('/api/upload/logs'),
 
   deleteLog: (id: string) => request<void>(`/api/upload/logs/${id}`, { method: 'DELETE' }),
+
+  importLandingZone: () =>
+    request<{ message: string; results: { file: string; uploadType?: string; result?: ParseSummary; error?: string }[] }>(
+      '/api/upload/import-landing-zone',
+      { method: 'POST' }
+    ),
 };
 
 // ─── Export ───────────────────────────────────────────────────────────────────

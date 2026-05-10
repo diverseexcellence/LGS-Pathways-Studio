@@ -61,6 +61,86 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         return Ok(result);
     }
 
+    [HttpPost("import-landing-zone")]
+    public async Task<IActionResult> ImportLandingZone(CancellationToken ct)
+    {
+        List<(string Name, Stream Content)> files;
+        try { files = await blob.ListLandingZoneFilesAsync(ct); }
+        catch (Exception ex) { return BadRequest(new { message = $"Could not access landing-zone: {ex.Message}" }); }
+
+        if (files.Count == 0) return Ok(new { message = "No CSV or Excel files found in landing-zone.", results = Array.Empty<object>() });
+
+        var results = new List<object>();
+        foreach (var (name, stream) in files)
+        {
+            try
+            {
+                var ext = Path.GetExtension(name).ToLowerInvariant();
+                var uploadType = DetectUploadType(name);
+
+                List<Dictionary<string, string>> rows;
+                var formFile = new StreamFormFile(stream, name,
+                    ext == ".csv" ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                rows = ext == ".csv" ? await ParseCsvAsync(formFile, ct) : ParseXlsx(formFile);
+
+                var result = await ProcessRowsAsync(rows, uploadType, name, ct);
+
+                await cosmos.CreateUploadLogAsync(new UploadLogDocument
+                {
+                    Id           = Guid.NewGuid().ToString(),
+                    UploadedBy   = CurrentAdminEmail,
+                    FileName     = name,
+                    UploadType   = uploadType,
+                    UploadedAt   = DateTime.UtcNow.ToString("o"),
+                    RecordCount  = result.ImportedRows,
+                    SkippedCount = result.SkippedRows,
+                    Errors       = result.Errors
+                });
+
+                await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+                    AuditEventType.Upload, entityType: "Upload", entityId: name,
+                    details: $"Landing zone import: {name} ({uploadType}) — {result.ImportedRows} rows, {result.SkippedRows} skipped",
+                    ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+                results.Add(new { file = name, uploadType, result });
+            }
+            catch (Exception ex)
+            {
+                results.Add(new { file = name, error = ex.Message });
+            }
+            finally
+            {
+                await stream.DisposeAsync();
+            }
+        }
+
+        return Ok(new { message = $"Processed {files.Count} file(s) from landing-zone.", results });
+    }
+
+    private static string DetectUploadType(string fileName)
+    {
+        var n = fileName.ToUpperInvariant();
+        if (n.Contains("ILEARN") || n.Contains("CHECKPOINT")) return "ILEARN";
+        if (n.Contains("IXL")) return "IXL";
+        if (n.Contains("ACADIENCE")) return "Acadience";
+        if (n.Contains("IREAD") || n.Contains("I-READ")) return "IREAD";
+        if (n.Contains("DEMO") || n.Contains("ROSTER") || n.Contains("STUDENT")) return "demographics";
+        return "demographics";
+    }
+
+    private sealed class StreamFormFile(Stream stream, string fileName, string contentType) : IFormFile
+    {
+        public string ContentType => contentType;
+        public string ContentDisposition => $"form-data; name=\"file\"; filename=\"{fileName}\"";
+        public IHeaderDictionary Headers => new HeaderDictionary();
+        public long Length => stream.Length;
+        public string Name => "file";
+        public string FileName => fileName;
+        public void CopyTo(Stream target) => stream.CopyTo(target);
+        public Task CopyToAsync(Stream target, CancellationToken ct = default) => stream.CopyToAsync(target, ct);
+        public Stream OpenReadStream() => stream;
+    }
+
     [HttpGet("logs")]
     public async Task<IActionResult> Logs()
     {
