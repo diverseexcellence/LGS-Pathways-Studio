@@ -18,6 +18,7 @@ public interface ICosmosDbService
     Task<StudentDocument?> FindStudentByStnAsync(string stn);
     Task<StudentDocument?> FindStudentByLocalIdAsync(string localId);
     Task<int> DeleteStudentsWhereNameIsNumericAsync();
+    Task<int> DeduplicateStudentsAsync();
 
     // Assessments
     Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null);
@@ -193,6 +194,55 @@ public class CosmosDbService : ICosmosDbService
         foreach (var s in toDelete)
             await Students.DeleteItemAsync<StudentDocument>(s.Id, new PartitionKey(s.ClassGroup));
         return toDelete.Count;
+    }
+
+    public async Task<int> DeduplicateStudentsAsync()
+    {
+        // Fetch all active students
+        var all = new List<StudentDocument>();
+        var q = Students.GetItemLinqQueryable<StudentDocument>()
+            .Where(s => s.IsActive)
+            .ToFeedIterator();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            all.AddRange(pg);
+        }
+
+        // Group by normalized full name (case-insensitive)
+        var groups = all.GroupBy(s => s.FullName.Trim().ToLowerInvariant())
+                        .Where(g => g.Count() > 1);
+
+        int merged = 0;
+        foreach (var group in groups)
+        {
+            var dupes = group.ToList();
+            // Keep the most enriched: prefer one with STN, then real ClassGroup, then most recent LastUpdated
+            var keeper = dupes
+                .OrderByDescending(s => s.Stn != null ? 1 : 0)
+                .ThenByDescending(s => s.ClassGroup != "Unassigned" ? 1 : 0)
+                .ThenByDescending(s => s.LastUpdated)
+                .First();
+
+            foreach (var dupe in dupes.Where(s => s.StudentId != keeper.StudentId))
+            {
+                // Reassign all assessments from dupe → keeper
+                var assessments = await GetAssessmentsAsync(dupe.StudentId);
+                foreach (var a in assessments)
+                {
+                    await Assessments.DeleteItemAsync<AssessmentDocument>(a.Id, new PartitionKey(a.StudentId));
+                    a.StudentId = keeper.StudentId;
+                    await Assessments.CreateItemAsync(a, new PartitionKey(a.StudentId));
+                }
+
+                // Soft-delete the duplicate
+                dupe.IsActive = false;
+                dupe.LastUpdated = DateTime.UtcNow.ToString("o");
+                await Students.UpsertItemAsync(dupe, new PartitionKey(dupe.ClassGroup));
+                merged++;
+            }
+        }
+        return merged;
     }
 
     public async Task<StudentDocument?> FindStudentByLocalIdAsync(string localId)

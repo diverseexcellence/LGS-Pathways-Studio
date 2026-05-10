@@ -339,6 +339,10 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     }
 
                     // IXL files can create students (they have full names and student IDs)
+                    // Second LocalId check: if name search missed but same LocalId exists, use it
+                    if (student is null && !string.IsNullOrWhiteSpace(localId))
+                        student = await cosmos.FindStudentByLocalIdAsync(localId);
+
                     if (student is null && uploadType == "IXL" && !string.IsNullOrWhiteSpace(name))
                     {
                         var newId = $"s-{Guid.NewGuid():N}";

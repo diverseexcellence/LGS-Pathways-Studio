@@ -93,6 +93,13 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
         var deleted = await cosmos.DeleteStudentsWhereNameIsNumericAsync();
         return Ok(new { deleted });
     }
+
+    [HttpPost("deduplicate")]
+    public async Task<IActionResult> Deduplicate()
+    {
+        var merged = await cosmos.DeduplicateStudentsAsync();
+        return Ok(new { merged });
+    }
 }
 
 public record StudentUpdateDto(string? ClassGroup, string? Grade, string? Tier, string? TierStatus, string? HomeRoom);
