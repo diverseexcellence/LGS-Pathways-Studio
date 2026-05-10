@@ -1,5 +1,8 @@
 node_modules/
 appsettings.Development.json
+docs/PRD-progress.md
+docs/pii-inventory.md
+docs/timesheet.md
 build/
 dist/
 coverage/
