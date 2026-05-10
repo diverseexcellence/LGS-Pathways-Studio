@@ -78,6 +78,13 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                 var ext = Path.GetExtension(name).ToLowerInvariant();
                 var uploadType = DetectUploadType(name);
 
+                if (uploadType == "__SKIP__")
+                {
+                    results.Add(new { file = name, uploadType = "skipped", result = (object?)null, error = (string?)null });
+                    await stream.DisposeAsync();
+                    continue;
+                }
+
                 List<Dictionary<string, string>> rows;
                 var formFile = new StreamFormFile(stream, name,
                     ext == ".csv" ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -120,11 +127,12 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     private static string DetectUploadType(string fileName)
     {
         var n = fileName.ToUpperInvariant();
+        if (n.StartsWith("TEST_")) return "__SKIP__";
         if (n.Contains("ILEARN") || n.Contains("CHECKPOINT")) return "ILEARN";
         if (n.Contains("IXL")) return "IXL";
         if (n.Contains("ACADIENCE")) return "Acadience";
         if (n.Contains("IREAD") || n.Contains("I-READ")) return "IREAD";
-        if (n.Contains("DEMO") || n.Contains("ROSTER") || n.Contains("STUDENT")) return "demographics";
+        if (n.Contains("ALO") || n.Contains("READING_PM") || n.Contains("READING-PM")) return "Acadience";
         return "demographics";
     }
 
@@ -255,9 +263,13 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     {
         if (uploadType.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
             fileName.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("English", StringComparison.OrdinalIgnoreCase)) return "ELA";
+            fileName.Contains("English", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("EnglishLanguageArts", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("Language", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("Reading", StringComparison.OrdinalIgnoreCase)) return "ELA";
         if (uploadType.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
+            fileName.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("Mathematics", StringComparison.OrdinalIgnoreCase)) return "Math";
         return "Mixed";
     }
 
