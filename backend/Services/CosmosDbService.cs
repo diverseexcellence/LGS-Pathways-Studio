@@ -198,16 +198,16 @@ public class CosmosDbService : ICosmosDbService
 
     public async Task<int> DeduplicateStudentsAsync()
     {
-        // Fetch all active students
+        // Fetch ALL students (no filter — Cosmos LINQ booleans are unreliable cross-partition)
         var all = new List<StudentDocument>();
-        var q = Students.GetItemLinqQueryable<StudentDocument>()
-            .Where(s => s.IsActive)
-            .ToFeedIterator();
+        var q = Students.GetItemLinqQueryable<StudentDocument>().ToFeedIterator();
         while (q.HasMoreResults)
         {
             var pg = await q.ReadNextAsync();
             all.AddRange(pg);
         }
+        // Filter active in memory
+        all = all.Where(s => s.IsActive).ToList();
 
         // Group by normalized full name (case-insensitive)
         var groups = all.GroupBy(s => s.FullName.Trim().ToLowerInvariant())
