@@ -65,6 +65,22 @@ function formatDate(d: string) {
   return d || 'N/A';
 }
 
+function formatDisplayName(fullName: string) {
+  if (!fullName) return fullName;
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length < 2) return fullName;
+  const last = parts[parts.length - 1];
+  const first = parts.slice(0, parts.length - 1).join(' ');
+  return `${last}, ${first}`;
+}
+
+function toYesNo(value: string | undefined, defaultVal = 'No') {
+  if (!value || value.trim() === '' || value === 'N/A') return defaultVal;
+  const v = value.trim().toLowerCase();
+  if (v === 'false' || v === '0' || v === 'no') return 'No';
+  return 'Yes';
+}
+
 function calculateAge(dob: string) {
   if (!dob || dob === 'N/A') return 'N/A';
   const d = new Date(dob);
@@ -195,15 +211,20 @@ export default function StudentProfile() {
           <div>
             <h1 className="text-2xl font-bold text-lgs-blue flex items-center gap-3">
               <User className="w-6 h-6 text-lgs-red" />
-              {student.fullName}
+              {formatDisplayName(student.fullName)}
             </h1>
+            {student.stn && (
+              <p className="text-sm text-slate-500 mt-1 ml-9">STN: <span className="font-mono font-medium text-slate-700">{student.stn}</span></p>
+            )}
             <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-600 items-center">
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Grade: {student.grade || 'N/A'}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Class: {student.classGroup || 'N/A'}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Gender: {student.gender || 'N/A'}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Ethnicity: {student.ethnicity || 'N/A'}</span>
               <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Age: {calculateAge(student.dob)}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">ELL: {student.ellStatus || 'N/A'}</span>
+              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">EL: {toYesNo(student.ellStatus)}</span>
+              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Sp. Ed: {toYesNo(student.spedStatus)}</span>
+              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">504: {toYesNo(student.section504, 'No')}</span>
               <button onClick={() => setShowDemographics(true)} className="text-lgs-red hover:underline text-sm font-medium ml-2">
                 View Demographics
               </button>
@@ -378,14 +399,18 @@ export default function StudentProfile() {
             <h3 className="text-lg font-bold text-slate-900 mb-4">Student Demographics</h3>
             <div className="space-y-3 text-sm">
               {[
-                ['Full Name', student.fullName],
+                ['Full Name', formatDisplayName(student.fullName)],
+                ['STN', student.stn || 'N/A'],
                 ['Date of Birth', student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A'],
                 ['Age', String(calculateAge(student.dob))],
                 ['Grade', student.grade || 'N/A'],
                 ['Class Group', student.classGroup || 'N/A'],
+                ['Homeroom', student.homeRoom || 'N/A'],
                 ['Gender', student.gender || 'N/A'],
                 ['Ethnicity', student.ethnicity || 'N/A'],
-                ['ELL Status', student.ellStatus || 'N/A'],
+                ['EL Status', toYesNo(student.ellStatus)],
+                ['Special Education', toYesNo(student.spedStatus)],
+                ['504 Status', toYesNo(student.section504, 'No')],
                 ['Enrolled', student.enrolDate ? new Date(student.enrolDate).toLocaleDateString() : 'N/A'],
                 ['Source File', student.fileName || 'Unknown'],
               ].map(([label, value]) => (

@@ -69,6 +69,10 @@ export interface Student {
   gender?: string;
   ethnicity?: string;
   ellStatus?: string;
+  spedStatus?: string;
+  section504?: string;
+  stn?: string;
+  homeRoom?: string;
   fileName?: string;
 }
 
