@@ -226,16 +226,17 @@ public class CosmosDbService : ICosmosDbService
 
             foreach (var dupe in dupes.Where(s => s.StudentId != keeper.StudentId))
             {
-                // Reassign all assessments from dupe → keeper
+                // Reassign assessments from dupe → keeper (new id required — partition key changes)
                 var assessments = await GetAssessmentsAsync(dupe.StudentId);
                 foreach (var a in assessments)
                 {
                     await Assessments.DeleteItemAsync<AssessmentDocument>(a.Id, new PartitionKey(a.StudentId));
+                    a.Id = $"a-{Guid.NewGuid():N}";
                     a.StudentId = keeper.StudentId;
                     await Assessments.CreateItemAsync(a, new PartitionKey(a.StudentId));
                 }
 
-                // Soft-delete the duplicate
+                // Soft-delete the duplicate student
                 dupe.IsActive = false;
                 dupe.LastUpdated = DateTime.UtcNow.ToString("o");
                 await Students.UpsertItemAsync(dupe, new PartitionKey(dupe.ClassGroup));
