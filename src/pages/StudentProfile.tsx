@@ -222,48 +222,113 @@ export default function StudentProfile() {
       : <ArrowDown className="w-4 h-4 ml-1 text-lgs-blue" />;
   }
 
-  if (loading) return <div className="p-8 text-slate-600">Loading student profile...</div>;
+  const tierColor =
+    student?.tier === 'Tier 1' ? 'bg-green-100 text-green-700 border-green-200' :
+    student?.tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
+    student?.tier === 'Tier 3' ? 'bg-red-100 text-red-700 border-red-200' :
+    'bg-slate-100 text-slate-600 border-slate-200';
+
+  const tierAccent =
+    student?.tier === 'Tier 1' ? 'border-t-green-500' :
+    student?.tier === 'Tier 2' ? 'border-t-yellow-500' :
+    student?.tier === 'Tier 3' ? 'border-t-red-500' :
+    'border-t-lgs-red';
+
+  if (loading) return (
+    <div className="flex items-center justify-center min-h-64">
+      <div className="text-center">
+        <div className="w-8 h-8 border-2 border-lgs-blue border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-slate-500 text-sm">Loading student profile…</p>
+      </div>
+    </div>
+  );
   if (error) return <div className="p-8 text-red-600">{error}</div>;
   if (!student) return <div className="p-8">Student not found.</div>;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-lgs-red">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-2xl font-bold text-lgs-blue flex items-center gap-3">
-              <User className="w-6 h-6 text-lgs-red" />
-              {formatDisplayName(student.fullName)}
-            </h1>
-            {student.stn && (
-              <p className="text-sm text-slate-500 mt-1 ml-9">STN: <span className="font-mono font-medium text-slate-700">{student.stn}</span></p>
+
+      {/* ── Hero Card ─────────────────────────────────────────────────────── */}
+      <div className={`bg-white rounded-xl shadow-sm border border-slate-200 border-t-4 ${tierAccent} overflow-hidden`}>
+        {/* Top bar: name + tier badge */}
+        <div className="px-6 pt-6 pb-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+          <div className="flex items-center gap-4">
+            {/* Avatar circle */}
+            <div className="w-14 h-14 rounded-full bg-lgs-blue flex items-center justify-center shrink-0 shadow-sm">
+              <span className="text-white text-xl font-bold select-none">
+                {student.fullName?.trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase()}
+              </span>
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-lgs-blue leading-tight">
+                {formatDisplayName(student.fullName)}
+              </h1>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                {student.stn && (
+                  <span className="text-xs text-slate-500 font-mono bg-slate-100 px-2 py-0.5 rounded">
+                    STN {student.stn}
+                  </span>
+                )}
+                <span className="text-xs text-slate-400">Grade {student.grade || '—'}</span>
+                <span className="text-slate-300 text-xs">•</span>
+                <span className="text-xs text-slate-400">{student.classGroup || '—'}</span>
+                {student.homeRoom && (
+                  <>
+                    <span className="text-slate-300 text-xs">•</span>
+                    <span className="text-xs text-slate-400">Room {student.homeRoom}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Tier badge */}
+          <div className="shrink-0">
+            <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border ${tierColor}`}>
+              {student.tier || 'Pending'}
+            </span>
+            {student.tierStatus && (
+              <p className="text-xs text-slate-400 text-right mt-1">{student.tierStatus}</p>
             )}
-            <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-600 items-center">
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Grade: {student.grade || 'N/A'}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Class: {student.classGroup || 'N/A'}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Gender: {student.gender || 'N/A'}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Ethnicity: {translateEthnicity(student.ethnicity)}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">DOB: {student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A'}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Age: {calculateAge(student.dob)}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">EL: {toYesNo(student.ellStatus)}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">Sp. Ed: {toYesNo(student.spedStatus)}</span>
-              <span className="bg-slate-100 px-3 py-1.5 rounded-md font-medium">504: {toYesNo(student.section504, 'No')}</span>
-              <button onClick={() => setShowDemographics(true)} className="text-lgs-red hover:underline text-sm font-medium ml-2">
-                View Demographics
-              </button>
-            </div>
           </div>
-          <div className="text-right">
-            <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full font-medium text-sm ${
-              student.tier === 'Tier 1' ? 'bg-green-100 text-green-700' :
-              student.tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700' :
-              student.tier === 'Tier 3' ? 'bg-red-100 text-red-700' :
-              'bg-slate-100 text-lgs-blue'
-            }`}>
-              {student.tier || 'Pending'} {student.tierStatus ? `(${student.tierStatus})` : ''}
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-slate-100 mx-6" />
+
+        {/* Demographic grid */}
+        <div className="px-6 py-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-4 text-sm">
+          {[
+            { label: 'Date of Birth', value: student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A' },
+            { label: 'Age', value: String(calculateAge(student.dob)) },
+            { label: 'Gender', value: student.gender || 'N/A' },
+            { label: 'Ethnicity', value: translateEthnicity(student.ethnicity) },
+            { label: 'EL Status', value: toYesNo(student.ellStatus) },
+            { label: 'Sp. Education', value: toYesNo(student.spedStatus) },
+            { label: '504 Plan', value: toYesNo(student.section504, 'No') },
+            { label: 'Lunch', value: student.lunchStatus || 'N/A' },
+          ].map(({ label, value }) => (
+            <div key={label}>
+              <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-0.5">{label}</p>
+              <p className="text-slate-800 font-medium truncate" title={value}>{value}</p>
             </div>
-          </div>
+          ))}
+        </div>
+
+        {/* Footer: entry/exit + demographics link */}
+        <div className="px-6 pb-4 flex flex-wrap items-center gap-4 text-xs text-slate-400">
+          {student.entryDate && (
+            <span>Entry: <span className="text-slate-600">{new Date(student.entryDate).toLocaleDateString()}</span></span>
+          )}
+          {student.exitDate && (
+            <span>Exit: <span className="text-slate-600">{new Date(student.exitDate).toLocaleDateString()}</span></span>
+          )}
+          <button
+            onClick={() => setShowDemographics(true)}
+            className="ml-auto text-lgs-red hover:underline font-medium text-xs"
+          >
+            Full Demographics →
+          </button>
         </div>
       </div>
 
