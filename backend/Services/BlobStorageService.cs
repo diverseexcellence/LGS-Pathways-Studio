@@ -15,13 +15,13 @@ public class BlobStorageService(IConfiguration config) : IBlobStorageService
 {
     private BlobContainerClient GetContainer()
     {
-        var connStr = config["Azure:BlobConnectionString"];
-        var container = config["Azure:BlobContainerName"] ?? "lgs-uploads";
+        var connStr = config["AzureBlob:ConnectionString"];
+        var container = config["AzureBlob:ContainerName"] ?? "lgs-uploads";
 
         if (string.IsNullOrEmpty(connStr))
         {
             // Local dev: use Azurite or skip blob
-            throw new InvalidOperationException("Azure Blob connection string not configured. Set Azure:BlobConnectionString in appsettings.");
+            throw new InvalidOperationException("Azure Blob connection string not configured. Set AzureBlob:ConnectionString in appsettings.");
         }
 
         var client = new BlobContainerClient(connStr, container);
@@ -48,7 +48,7 @@ public class BlobStorageService(IConfiguration config) : IBlobStorageService
 
     public async Task<List<(string Name, Stream Content)>> ListLandingZoneFilesAsync(CancellationToken ct = default)
     {
-        var connStr = config["Azure:BlobConnectionString"];
+        var connStr = config["AzureBlob:ConnectionString"];
         if (string.IsNullOrEmpty(connStr))
             throw new InvalidOperationException("Azure Blob connection string not configured.");
 
