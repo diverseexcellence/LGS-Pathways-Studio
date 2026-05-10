@@ -25,6 +25,7 @@ public interface ICosmosDbService
     Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null);
     Task CreateAssessmentAsync(AssessmentDocument assessment);
     Task DeleteAssessmentsByFileNameAsync(string fileName);
+    Task<int> DeleteAllAssessmentsAsync();
 
     // AI Summaries
     Task<AiSummaryDocument?> GetLatestSummaryAsync(string studentId);
@@ -321,6 +322,22 @@ public class CosmosDbService : ICosmosDbService
 
     public async Task CreateAssessmentAsync(AssessmentDocument assessment)
         => await Assessments.CreateItemAsync(assessment, new PartitionKey(assessment.StudentId));
+
+    public async Task<int> DeleteAllAssessmentsAsync()
+    {
+        var all = new List<AssessmentDocument>();
+        var q = Assessments.GetItemQueryIterator<AssessmentDocument>(
+            new QueryDefinition("SELECT * FROM c"),
+            requestOptions: new QueryRequestOptions { MaxItemCount = -1 });
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            all.AddRange(pg);
+        }
+        foreach (var a in all)
+            await Assessments.DeleteItemAsync<AssessmentDocument>(a.Id, new PartitionKey(a.StudentId));
+        return all.Count;
+    }
 
     public async Task DeleteAssessmentsByFileNameAsync(string fileName)
     {

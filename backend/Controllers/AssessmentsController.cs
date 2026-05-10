@@ -16,4 +16,11 @@ public class AssessmentsController(ICosmosDbService cosmos) : ControllerBase
         var items = await cosmos.GetAssessmentsAsync(studentId, subject);
         return Ok(items);
     }
+
+    [HttpDelete("all")]
+    public async Task<IActionResult> DeleteAll()
+    {
+        var deleted = await cosmos.DeleteAllAssessmentsAsync();
+        return Ok(new { deleted });
+    }
 }
