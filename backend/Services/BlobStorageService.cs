@@ -48,9 +48,9 @@ public class BlobStorageService(IConfiguration config) : IBlobStorageService
 
     public async Task<List<(string Name, Stream Content)>> ListLandingZoneFilesAsync(CancellationToken ct = default)
     {
-        var connStr = config["AzureBlob:ConnectionString"];
+        var connStr = config["LandingZone:ConnectionString"] ?? config["AzureBlob:ConnectionString"];
         if (string.IsNullOrEmpty(connStr))
-            throw new InvalidOperationException("Azure Blob connection string not configured.");
+            throw new InvalidOperationException("Landing zone connection string not configured. Set LandingZone:ConnectionString in App Service environment variables.");
 
         var landingZone = new BlobContainerClient(connStr, "landing-zone");
         var results = new List<(string, Stream)>();
