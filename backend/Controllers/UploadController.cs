@@ -138,17 +138,28 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         return "demographics";
     }
 
-    private sealed class StreamFormFile(Stream stream, string fileName, string contentType) : IFormFile
+    private sealed class StreamFormFile : IFormFile
     {
-        public string ContentType => contentType;
-        public string ContentDisposition => $"form-data; name=\"file\"; filename=\"{fileName}\"";
+        private readonly Stream _stream;
+        private readonly string _fileName;
+        private readonly string _contentType;
+
+        public StreamFormFile(Stream stream, string fileName, string contentType)
+        {
+            _stream = stream;
+            _fileName = fileName;
+            _contentType = contentType;
+        }
+
+        public string ContentType => _contentType;
+        public string ContentDisposition => $"form-data; name=\"file\"; filename=\"{_fileName}\"";
         public IHeaderDictionary Headers => new HeaderDictionary();
-        public long Length => stream.Length;
+        public long Length => _stream.Length;
         public string Name => "file";
-        public string FileName => fileName;
-        public void CopyTo(Stream target) => stream.CopyTo(target);
-        public Task CopyToAsync(Stream target, CancellationToken ct = default) => stream.CopyToAsync(target, ct);
-        public Stream OpenReadStream() => stream;
+        public string FileName => _fileName;
+        public void CopyTo(Stream target) => _stream.CopyTo(target);
+        public Task CopyToAsync(Stream target, CancellationToken ct = default) => _stream.CopyToAsync(target, ct);
+        public Stream OpenReadStream() => _stream;
     }
 
     [HttpGet("logs")]

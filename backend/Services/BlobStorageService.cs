@@ -11,10 +11,10 @@ public interface IBlobStorageService
     Task<List<LandingZoneFile>> ListLandingZoneFilesAsync(CancellationToken ct = default);
 }
 
-public sealed class LandingZoneFile(string name, Stream content)
+public sealed class LandingZoneFile
 {
-    public string Name { get; } = name;
-    public Stream Content { get; } = content;
+    public string Name { get; set; } = string.Empty;
+    public Stream Content { get; set; } = Stream.Null;
 }
 
 public class BlobStorageService(IConfiguration config) : IBlobStorageService
@@ -70,7 +70,7 @@ public class BlobStorageService(IConfiguration config) : IBlobStorageService
             var ms = new MemoryStream();
             await blob.DownloadToAsync(ms, ct);
             ms.Position = 0;
-            results.Add(new LandingZoneFile(item.Name, ms));
+            results.Add(new LandingZoneFile { Name = item.Name, Content = ms });
         }
 
         return results;
