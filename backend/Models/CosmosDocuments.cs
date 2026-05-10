@@ -16,6 +16,9 @@ public class StudentDocument
     [JsonProperty("dob")]
     public string? Dob { get; set; }
 
+    [JsonProperty("stn")]
+    public string? Stn { get; set; }
+
     [JsonProperty("classGroup")]
     public string ClassGroup { get; set; } = "";
 
@@ -54,6 +57,9 @@ public class StudentDocument
 
     [JsonProperty("lastUpdated")]
     public string LastUpdated { get; set; } = DateTime.UtcNow.ToString("o");
+
+    [JsonProperty("localId")]
+    public string? LocalId { get; set; }
 
     [JsonProperty("sourceFile")]
     public string? SourceFile { get; set; }

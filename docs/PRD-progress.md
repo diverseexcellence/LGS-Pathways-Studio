@@ -3,7 +3,7 @@
 **Source:** Meeting Transcript (April 9, 2026)  
 **Total Tasks:** 48 | **Total Estimated Hours:** 200h  
 **Stack:** React 19 + Vite + TypeScript | .NET 8 Web API | Azure Cosmos DB | Azure App Service  
-**Last Updated:** 2026-04-30 (tasks 2, 5, 6 completed)
+**Last Updated:** 2026-05-04 (tasks 8, 9, 13, 14 completed)
 
 ---
 
@@ -35,16 +35,16 @@
 
 | # | Task | Details | Est. | Status | Notes |
 |---|------|---------|------|--------|-------|
-| 8 | PII field inventory & data classification | 12 PII fields classified into 3 sensitivity tiers; data flow mapping | 6h | ❌ Not Done | No classification document or data flow map exists. |
-| 9 | Encryption at rest & in transit | Verify TDE on SQL, TLS 1.2+, HTTPS-only App Service, HSTS headers | 3h | ⚠️ Partial | HTTPS-only and TLS 1.2 enforced on App Service and Storage. No TDE (no SQL). HSTS headers not added to .NET API responses. |
-| 10 | Dynamic Data Masking on Azure SQL | DDM rules on all Tier 1/2 PII columns; UNMASK for App Service identity | 10h | 🚫 N/A | SQL not used. Cosmos DB has no DDM equivalent. Needs stakeholder decision on Cosmos-level access strategy. |
-| 11 | PII redaction before AI calls | .NET PiiRedactionService; tokenize student identity; strip all PII from prompts | 10h | ✅ Done | `backend/Services/PiiRedactionService.cs` implemented. |
+| 8 | PII field inventory & data classification | 12 PII fields classified into 3 sensitivity tiers; data flow mapping | 6h | ✅ Done | `docs/pii-inventory.md` — 3-tier classification, 30+ fields mapped, data flow diagram, compliance status. |
+| 9 | Encryption at rest & in transit | Verify TDE on SQL, TLS 1.2+, HTTPS-only App Service, HSTS headers | 3h | ✅ Done | HSTS (365d, IncludeSubDomains) added to `Program.cs`. Security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`. HTTPS-only + TLS 1.2 on App Service and Storage already enforced. |
+| 10 | Dynamic Data Masking on Azure SQL | DDM rules on all Tier 1/2 PII columns; UNMASK for App Service identity | 10h | 🚫 N/A | SQL not used. Cosmos DB has no DDM equivalent. Stakeholder confirmed Cosmos DB — no replacement action required. |
+| 11 | PII redaction before AI calls | .NET PiiRedactionService; tokenize student identity; strip all PII from prompts | 10h | ✅ Done | `PiiRedactionService.cs` — AI prompt redaction + `RedactRawFields()` strips 30+ PII column names from raw ingestion data before Cosmos write. |
 | 12 | App Insights PII scrubber | Telemetry initializer strips PII from dependency logs | 2h | ✅ Done | `PiiTelemetryInitializer.cs` scrubs student IDs from URL paths and email addresses from all telemetry types. Registered in `Program.cs`. |
-| 13 | Audit logging middleware | .NET middleware logging all PII-access endpoints; user, action, timestamp, IP | 6h | ⚠️ Partial | `AuditService.cs` and `AuditController.cs` exist. Middleware not wired to all PII-access endpoints automatically. |
-| 14 | Export watermarking | ClosedXML header/footer with user name, timestamp, confidentiality notice | 4h | ❌ Not Done | `ExportController.cs` exports data but no watermark, confidentiality notice, or user attribution in Excel output. |
+| 13 | Audit logging middleware | .NET middleware logging all PII-access endpoints; user, action, timestamp, IP | 6h | ✅ Done | `Middleware/PiiAuditMiddleware.cs` auto-logs all 2xx requests to `/api/students/`, `/api/assessments/`, `/api/export`, `/api/ai/` with user, IP, method, path, status. |
+| 14 | Export watermarking | ClosedXML header/footer with user name, timestamp, confidentiality notice | 4h | ✅ Done | `ExportController.cs` — row 1: dark-red confidentiality banner; row 2: admin name, email, timestamp, record count. Data starts row 4. |
 | 15 | Basic auth (MVP — no SSO) | JWT-based login for admin users; hashed credentials in DB | 5h | ✅ Done | `AuthController.cs`, `TokenService.cs`, BCrypt hashing, JWT wired in `Program.cs`. |
 
-**PII/Security: ~17h done / ~25h remaining** *(excl. 10h DDM — architecture decision pending)*
+**PII/Security: ~34h done / ~5h remaining** *(10h DDM excluded — N/A; superAdmin gate + IsSuperAdmin field also complete)*
 
 ---
 
@@ -149,7 +149,7 @@
 | Area | Est. Hours | Done | Remaining |
 |------|-----------|------|-----------|
 | Azure Infrastructure | 19h | ~8h | ~11h |
-| PII / Security | 46h | ~15h | ~27h* |
+| PII / Security | 46h | ~34h | ~5h* |
 | Student Profile | 23h | ~1h | ~22h |
 | Tiering Workflow | 30h | 0h | 30h |
 | Assessment Data | 16h | ~0.5h | ~15.5h |
@@ -157,15 +157,21 @@
 | Learning Plans | 31h | 0h | 31h |
 | AI Summary | 6h | 0h | 6h |
 | Data Quality | 3h | 0h | 3h |
-| **Total** | **200h** | **~24.5h** | **~171.5h** |
+| **Total** | **200h** | **~43h** | **~152h** |
 
 *10h DDM (task #10) excluded from remaining — pending stakeholder decision on SQL vs Cosmos DB strategy.
 
 ---
 
-## Open Decisions Required
+## Resolved Decisions
 
-1. **SQL vs Cosmos DB** — Plan specified Azure SQL (TDE, DDM). Project uses Cosmos DB. Confirm which is canonical for MVP. If Cosmos stays, DDM (10h) needs a replacement access-control strategy.
-2. **Custom domain** — A domain name is needed before task #1 can be completed.
-3. **Gemini vs Ollama** — Plan says Gemini for AI. Current backend uses Ollama (local). Confirm which AI provider for production.
-4. **Key Vault access policy** — One `az keyvault set-policy` command pending to grant App Service managed identity access to Key Vault secrets.
+1. **SQL vs Cosmos DB** — Cosmos DB confirmed. DDM (task #10) marked N/A.
+2. **Custom domain** — Not needed for MVP. Task #1 partial acceptable.
+3. **Gemini vs Ollama** — Ollama confirmed for MVP.
+4. **Key Vault access policy** — Provisioned via Bicep. `az keyvault set-policy` is last-resort manual fallback only.
+
+## Remaining Open Items
+
+- **Seed admin passwords** — Change `velvet` / `maurice` default passwords before any real user access.
+- **Grant IsSuperAdmin** — Manually set `isSuperAdmin: true` on one admin document in Cosmos DB to enable audit log access.
+- **Student data upload** — Students container is empty. Need a CSV/Excel file to populate demographics.

@@ -196,14 +196,77 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         {
             try
             {
-                var name = GetVal(row, "FullName", "Full Name", "Name", "Student Name");
-                if (string.IsNullOrWhiteSpace(name)) { skipped++; continue; }
+                // Build full name — try exact combined-name columns first
+                var name = GetValExact(row, "FullName", "Full Name", "Name", "Student Name",
+                                       "Student Legal Name", "Legal Name");
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    var first = GetValExact(row, "First name", "First Name", "Student First Name", "FirstName",
+                                            "Given Name", "Legal First Name", "Student Legal First Name");
+                    var last  = GetValExact(row, "Last name",  "Last Name",  "Student Last Name",  "LastName",
+                                            "Family Name", "Surname", "Legal Last Name", "Student Legal Last Name");
+                    if (!string.IsNullOrWhiteSpace(first) && !string.IsNullOrWhiteSpace(last))
+                        name = $"{first} {last}";
+                }
+                // Handle "Last, First" combined format (some IXL exports)
+                if (!string.IsNullOrWhiteSpace(name) && name.Contains(',') && !name.Contains(' '))
+                {
+                    var parts = name.Split(',', 2);
+                    if (parts.Length == 2) name = $"{parts[1].Trim()} {parts[0].Trim()}";
+                }
+                // For non-demographics, skip if no name. Demographics rows may still enrich via STN.
+                if (string.IsNullOrWhiteSpace(name) && uploadType != "demographics") { skipped++; continue; }
 
                 if (uploadType == "demographics")
                 {
-                    var dob = GetVal(row, "DOB", "Date of Birth", "Birth Date") ?? "";
-                    var existing = await cosmos.FindStudentByNameAndDobAsync(name, dob);
-                    if (existing is not null) { skipped++; continue; }
+                    var dob = GetVal(row, "DOB", "Date of Birth", "Birth Date", "Student DOB",
+                                     "STUDENTS.DOB") ?? "";
+                    var stn = GetVal(row, "STN", "State_StudentNumber",
+                                     "Student State ID", "STUDENTS.State_StudentNumber");
+                    var localId = GetVal(row, "Student_Number", "STUDENTS.Student_Number",
+                                         "Student Number", "Local Student ID");
+
+                    // Match priority: LocalId → STN → name+dob
+                    StudentDocument? existing = null;
+                    if (!string.IsNullOrWhiteSpace(localId))
+                        existing = await cosmos.FindStudentByLocalIdAsync(localId);
+                    if (existing is null && !string.IsNullOrWhiteSpace(stn))
+                        existing = await cosmos.FindStudentByStnAsync(stn);
+                    if (existing is null && !string.IsNullOrWhiteSpace(name))
+                        existing = await cosmos.FindStudentByNameAndDobAsync(name, dob);
+
+                    if (existing is not null)
+                    {
+                        // Enrich existing student with demographic fields
+                        existing.Dob        = dob.Length > 0 ? dob : existing.Dob;
+                        existing.Stn        = stn ?? existing.Stn;
+                        existing.LocalId    = localId ?? existing.LocalId;
+                        existing.ClassGroup = GetVal(row, "Class", "ClassGroup", "Class Group",
+                                                    "Home_Room", "Homeroom", "STUDENTS.Home_Room") ?? existing.ClassGroup;
+                        existing.Grade      = GetVal(row, "Grade", "Grade_Level", "Enrolled Grade",
+                                                    "STUDENTS.Grade_Level", "Student Grade Level")?.TrimStart('0') ?? existing.Grade;
+                        existing.Gender     = GetVal(row, "Gender", "STUDENTS.Gender") ?? existing.Gender;
+                        existing.Ethnicity  = GetVal(row, "Ethnicity", "Race", "STUDENTS.Ethnicity",
+                                                    "Race/Ethnicity", "STUDENTS.FedEthnicity") ?? existing.Ethnicity;
+                        existing.EllStatus  = GetVal(row, "ELL", "English Learner", "ELL Status",
+                                                    "Identified English Learner Status",
+                                                    "S_STU_CRDC_X.englishlearner_yn") ?? existing.EllStatus;
+                        existing.SpedStatus = GetVal(row, "SPED", "Special Education",
+                                                    "Special Education Status",
+                                                    "S_IN_STU_X.special_education_tf") ?? existing.SpedStatus;
+                        existing.Section504 = GetVal(row, "504", "Section 504", "Section 504 Status",
+                                                    "S_STU_CRDC_X.section504_yn",
+                                                    "U_STUDENT_CUSTOM_ALERT_INFO.alert_504") ?? existing.Section504;
+                        existing.HomeRoom   = GetVal(row, "HomeRoom", "Home Room", "Home_Room",
+                                                    "STUDENTS.Home_Room") ?? existing.HomeRoom;
+                        existing.LastUpdated = DateTime.UtcNow.ToString("o");
+                        await cosmos.UpsertStudentAsync(existing);
+                        imported++;
+                        continue;
+                    }
+
+                    // No existing student — only create if we have a name to identify them
+                    if (string.IsNullOrWhiteSpace(name)) { skipped++; continue; } // PowerSchool rows with no name columns
 
                     var studentId = $"s-{Guid.NewGuid():N}";
                     await cosmos.UpsertStudentAsync(new StudentDocument
@@ -212,14 +275,26 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         StudentId  = studentId,
                         FullName   = name,
                         Dob        = dob,
-                        ClassGroup = GetVal(row, "Class", "ClassGroup", "Class Group", "Home_Room", "Homeroom") ?? "Unassigned",
-                        Grade      = GetVal(row, "Grade", "Grade_Level", "Enrolled Grade")?.TrimStart('0'),
-                        Gender     = GetVal(row, "Gender"),
-                        Ethnicity  = GetVal(row, "Ethnicity", "Race"),
-                        EllStatus  = GetVal(row, "ELL", "English Learner"),
-                        SpedStatus = GetVal(row, "SPED", "Special Education"),
-                        Section504 = GetVal(row, "504"),
-                        HomeRoom   = GetVal(row, "HomeRoom", "Home Room", "Home_Room"),
+                        Stn        = stn,
+                        LocalId    = localId,
+                        ClassGroup = GetVal(row, "Class", "ClassGroup", "Class Group",
+                                           "Home_Room", "Homeroom", "STUDENTS.Home_Room") ?? "Unassigned",
+                        Grade      = GetVal(row, "Grade", "Grade_Level", "Enrolled Grade",
+                                           "STUDENTS.Grade_Level", "Student Grade Level")?.TrimStart('0'),
+                        Gender     = GetVal(row, "Gender", "STUDENTS.Gender"),
+                        Ethnicity  = GetVal(row, "Ethnicity", "Race", "STUDENTS.Ethnicity",
+                                           "Race/Ethnicity", "STUDENTS.FedEthnicity"),
+                        EllStatus  = GetVal(row, "ELL", "English Learner", "ELL Status",
+                                           "Identified English Learner Status",
+                                           "S_STU_CRDC_X.englishlearner_yn"),
+                        SpedStatus = GetVal(row, "SPED", "Special Education",
+                                           "Special Education Status",
+                                           "S_IN_STU_X.special_education_tf"),
+                        Section504 = GetVal(row, "504", "Section 504", "Section 504 Status",
+                                           "S_STU_CRDC_X.section504_yn",
+                                           "U_STUDENT_CUSTOM_ALERT_INFO.alert_504"),
+                        HomeRoom   = GetVal(row, "HomeRoom", "Home Room", "Home_Room",
+                                           "STUDENTS.Home_Room"),
                         SourceFile = fileName,
                         Tier       = "Pending",
                         TierStatus = "Pending",
@@ -229,20 +304,62 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                 }
                 else
                 {
-                    // Assessment — match student by name
-                    var (allStudents, _) = await cosmos.ListStudentsAsync(1, 1000, name, null);
-                    var student = allStudents.FirstOrDefault(s =>
-                        s.FullName.Equals(name, StringComparison.OrdinalIgnoreCase) && s.IsActive);
+                    // Match student — try STN first, then localId, then name
+                    StudentDocument? student = null;
+                    var stn = GetVal(row, "STN", "Student State ID", "State_StudentNumber",
+                                     "State Student Number", "State ID", "SSID",
+                                     "Student State Number", "State Student ID Number",
+                                     "Student ID", "ILEARN Student ID", "Statewide Student ID");
+                    var localId = GetVal(row, "ID", "Student_Number", "Student Number",
+                                         "Local ID", "Local Student ID", "School ID",
+                                         "Local Student Number");
+                    if (!string.IsNullOrWhiteSpace(stn))
+                        student = await cosmos.FindStudentByStnAsync(stn);
+                    if (student is null && !string.IsNullOrWhiteSpace(localId))
+                        student = await cosmos.FindStudentByLocalIdAsync(localId);
+                    if (student is null && !string.IsNullOrWhiteSpace(name))
+                    {
+                        var (allStudents, _) = await cosmos.ListStudentsAsync(1, 1000, name, null);
+                        student = allStudents.FirstOrDefault(s =>
+                            s.FullName.Equals(name, StringComparison.OrdinalIgnoreCase) && s.IsActive);
+                    }
+
+                    // IXL files can create students (they have full names and student IDs)
+                    if (student is null && uploadType == "IXL" && !string.IsNullOrWhiteSpace(name))
+                    {
+                        var newId = $"s-{Guid.NewGuid():N}";
+                        student = new StudentDocument
+                        {
+                            Id         = newId,
+                            StudentId  = newId,
+                            FullName   = name,
+                            LocalId    = localId,
+                            ClassGroup = "Unassigned",
+                            SourceFile = fileName,
+                            Tier       = "Pending",
+                            TierStatus = "Pending",
+                            EnrolDate  = DateTime.UtcNow.ToString("o"),
+                            LastUpdated = DateTime.UtcNow.ToString("o")
+                        };
+                        await cosmos.UpsertStudentAsync(student);
+                    }
 
                     if (student is null) { skipped++; continue; }
 
-                    var scoreRaw = GetVal(row, "Score", "Scale Score", "Overall Score", "Diagnostic level", "SmartScore");
-                    double.TryParse(scoreRaw, out var score);
+                    var scoreRaw = GetVal(row, "Score", "Scale Score", "Overall Score",
+                                         "Overall ELA score", "Overall reading score",
+                                         "Reading Composite Score", "Diagnostic level", "SmartScore");
+                    double.TryParse(scoreRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var score);
 
-                    var subject = GetVal(row, "Subject", "Content Area") ?? DetectSubject(uploadType, fileName);
-                    var proficiency = GetVal(row, "Proficiency Level", "Performance Level", "Status", "Achievement Level");
-                    var period = GetVal(row, "Period", "Term", "School Year");
-                    var date = GetVal(row, "Date", "Date Taken", "Date of completion", "Test Date");
+                    var subject = GetVal(row, "Subject", "Content Area", "Test Subject")
+                                  ?? DetectSubject(uploadType, fileName);
+                    var proficiency = GetVal(row, "Proficiency Level", "Performance Level",
+                                            "Status", "Achievement Level", "Overall ELA tier",
+                                            "Reading Composite Status");
+                    var period = GetVal(row, "Period", "Term", "School Year",
+                                        "Benchmark Period", "Test OppNumber");
+                    var date = GetVal(row, "Date", "Date Taken", "Date of completion",
+                                      "Test Date", "Reading Composite Date");
 
                     await cosmos.CreateAssessmentAsync(new AssessmentDocument
                     {
@@ -305,6 +422,16 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                 k.EndsWith("." + key, StringComparison.OrdinalIgnoreCase) ||
                 k.Contains(key, StringComparison.OrdinalIgnoreCase));
             if (match is not null && !string.IsNullOrWhiteSpace(row[match])) return row[match].Trim();
+        }
+        return null;
+    }
+
+    // Exact-match only — no fuzzy substring. Use for name columns to avoid picking up STUDENTS.ID etc.
+    private static string? GetValExact(Dictionary<string, string> row, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (row.TryGetValue(key, out var val) && !string.IsNullOrWhiteSpace(val)) return val.Trim();
         }
         return null;
     }

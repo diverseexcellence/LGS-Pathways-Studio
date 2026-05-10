@@ -15,6 +15,9 @@ public interface ICosmosDbService
     Task<(List<StudentDocument> Items, int Total)> ListStudentsAsync(int page, int pageSize, string? search, string? classGroup, bool activeOnly = true);
     Task UpsertStudentAsync(StudentDocument student);
     Task<StudentDocument?> FindStudentByNameAndDobAsync(string fullName, string dob);
+    Task<StudentDocument?> FindStudentByStnAsync(string stn);
+    Task<StudentDocument?> FindStudentByLocalIdAsync(string localId);
+    Task<int> DeleteStudentsWhereNameIsNumericAsync();
 
     // Assessments
     Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null);
@@ -150,6 +153,52 @@ public class CosmosDbService : ICosmosDbService
     {
         var query = Students.GetItemLinqQueryable<StudentDocument>()
             .Where(s => s.FullName == fullName && s.Dob == dob)
+            .ToFeedIterator();
+
+        while (query.HasMoreResults)
+        {
+            var page = await query.ReadNextAsync();
+            var item = page.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
+
+    public async Task<StudentDocument?> FindStudentByStnAsync(string stn)
+    {
+        var query = Students.GetItemLinqQueryable<StudentDocument>()
+            .Where(s => s.Stn == stn && s.IsActive)
+            .ToFeedIterator();
+
+        while (query.HasMoreResults)
+        {
+            var page = await query.ReadNextAsync();
+            var item = page.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
+
+    public async Task<int> DeleteStudentsWhereNameIsNumericAsync()
+    {
+        var all = new List<StudentDocument>();
+        var q = Students.GetItemLinqQueryable<StudentDocument>().ToFeedIterator();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            all.AddRange(pg);
+        }
+
+        var toDelete = all.Where(s => s.FullName.All(c => char.IsDigit(c) || c == ' ')).ToList();
+        foreach (var s in toDelete)
+            await Students.DeleteItemAsync<StudentDocument>(s.Id, new PartitionKey(s.ClassGroup));
+        return toDelete.Count;
+    }
+
+    public async Task<StudentDocument?> FindStudentByLocalIdAsync(string localId)
+    {
+        var query = Students.GetItemLinqQueryable<StudentDocument>()
+            .Where(s => s.LocalId == localId && s.IsActive)
             .ToFeedIterator();
 
         while (query.HasMoreResults)

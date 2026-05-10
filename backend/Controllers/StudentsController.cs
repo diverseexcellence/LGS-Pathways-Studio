@@ -87,6 +87,12 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
 
         return NoContent();
     }
+    [HttpDelete("cleanup-numeric-names")]
+    public async Task<IActionResult> CleanupNumericNames()
+    {
+        var deleted = await cosmos.DeleteStudentsWhereNameIsNumericAsync();
+        return Ok(new { deleted });
+    }
 }
 
 public record StudentUpdateDto(string? ClassGroup, string? Grade, string? Tier, string? TierStatus, string? HomeRoom);
