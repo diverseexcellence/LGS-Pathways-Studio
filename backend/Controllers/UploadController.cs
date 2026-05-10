@@ -300,16 +300,29 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
     private static async Task<List<Dictionary<string, string>>> ParseCsvAsync(IFormFile file, CancellationToken ct)
     {
-        using var reader = new StreamReader(file.OpenReadStream());
-        using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
+        var config = new CsvHelper.Configuration.CsvConfiguration(CultureInfo.InvariantCulture)
+        {
+            HasHeaderRecord = true,
+            MissingFieldFound = null,
+            BadDataFound = null,
+            TrimOptions = CsvHelper.Configuration.TrimOptions.Trim,
+        };
+        using var reader = new StreamReader(file.OpenReadStream(), detectEncodingFromByteOrderMarks: true);
+        using var csv = new CsvReader(reader, config);
         var rows = new List<Dictionary<string, string>>();
         await csv.ReadAsync();
         csv.ReadHeader();
+        var headers = csv.HeaderRecord ?? [];
         while (await csv.ReadAsync())
         {
             var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var header in csv.HeaderRecord ?? [])
-                row[header] = csv.GetField(header) ?? "";
+            for (int i = 0; i < headers.Length; i++)
+            {
+                var header = headers[i].Trim().TrimStart('﻿');
+                if (string.IsNullOrWhiteSpace(header)) continue;
+                if (!row.ContainsKey(header))
+                    row[header] = csv.GetField(i) ?? "";
+            }
             rows.Add(row);
         }
         return rows;
