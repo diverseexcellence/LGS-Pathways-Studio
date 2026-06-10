@@ -280,8 +280,15 @@ export default function DataIngestion() {
           {isUploading ? 'Uploading & Parsing…' : 'Upload Data'}
         </button>
 
-        <div className="border-t border-slate-200 pt-4">
-          <p className="text-xs text-slate-500 mb-3">
+        <div className="border-t border-slate-200 pt-4 space-y-3">
+          <button
+            onClick={handleExport}
+            disabled={isExporting}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-700 text-white rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50 transition-colors"
+          >
+            {isExporting ? 'Exporting…' : 'Export All Students (.xlsx)'}
+          </button>
+          <p className="text-xs text-slate-500">
             Or import all files already staged in the Azure <strong>landing-zone</strong> container.
             Upload type is detected automatically from each filename.
           </p>
@@ -353,27 +360,17 @@ export default function DataIngestion() {
 
       {/* Upload History */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        {/* Header row */}
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2">
-            <History className="w-5 h-5 text-lgs-red" />
-            Upload History
-            {uploadLogs.length > 0 && (
-              <span className="text-xs font-normal text-slate-400 ml-1">
-                {filteredLogs.length !== uploadLogs.length
-                  ? `${filteredLogs.length} of ${uploadLogs.length}`
-                  : uploadLogs.length}
-              </span>
-            )}
-          </h2>
-          <button
-            onClick={handleExport}
-            disabled={isExporting}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-lgs-blue text-white rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
-          >
-            {isExporting ? 'Exporting…' : 'Export All Students (.xlsx)'}
-          </button>
-        </div>
+        <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2 mb-4">
+          <History className="w-5 h-5 text-lgs-red" />
+          Upload History
+          {uploadLogs.length > 0 && (
+            <span className="text-xs font-normal text-slate-400 ml-1">
+              {filteredLogs.length !== uploadLogs.length
+                ? `${filteredLogs.length} of ${uploadLogs.length}`
+                : uploadLogs.length}
+            </span>
+          )}
+        </h2>
 
         {/* Search + filter bar */}
         {uploadLogs.length > 0 && (
