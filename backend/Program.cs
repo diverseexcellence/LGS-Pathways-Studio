@@ -72,11 +72,20 @@ builder.Services.AddScoped<ISchoolAverageService, SchoolAverageService>();
 // LlmProvider:Name = "groq"      → GroqProvider      (free hosted, no infra — default for Azure)
 // LlmProvider:Name = "meta-llama"→ MetaLlamaProvider (self-hosted Ollama serving Llama)
 // LlmProvider:Name = "ollama"    → OllamaProvider    (local dev, any model)
+// LlmProvider:Name = "groq"        → GroqProvider        (free hosted, Meta Llama — default for Azure)
+// LlmProvider:Name = "openrouter"  → OpenRouterProvider  (free hosted, many models incl. Llama/Mistral/Qwen)
+// LlmProvider:Name = "meta-llama"  → MetaLlamaProvider   (self-hosted Ollama serving Llama)
+// LlmProvider:Name = "ollama"      → OllamaProvider      (local dev, any model)
 var llmProviderName = builder.Configuration["LlmProvider:Name"] ?? "groq";
 if (llmProviderName.Equals("groq", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddScoped<ILlmProvider, GroqProvider>();
     builder.Services.AddScoped<ILlmService, GroqProvider>();
+}
+else if (llmProviderName.Equals("openrouter", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddScoped<ILlmProvider, OpenRouterProvider>();
+    builder.Services.AddScoped<ILlmService, OpenRouterProvider>();
 }
 else if (llmProviderName.Equals("meta-llama", StringComparison.OrdinalIgnoreCase))
 {
