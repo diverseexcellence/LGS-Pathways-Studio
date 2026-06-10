@@ -77,7 +77,7 @@ public class PiiRedactionService : IPiiRedactionService
 
         // studentId is an internal surrogate — NOT a name, DOB, or any personal identifier
         return $"""
-            You are a specialist educational support advisor at LGS, a K-8 school. A student (reference: S-{studentId}) has the following assessment history.
+            You are a specialist educational support advisor at LGS, a K-8 school. A student (reference: {studentId.ToUpper().Replace("S-S-", "S-")}) has the following assessment history.
             No personal information is included.{schoolContext}
 
             Write 3–5 sentences of clear, plain-English narrative for an educator audience:
