@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X } from 'lucide-react';
 import { uploadApi, exportApi, ParseSummary, UploadLog } from '../lib/api';
 
 const UPLOAD_TYPES = [
@@ -24,7 +24,8 @@ export default function DataIngestion() {
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importResults, setImportResults] = useState<{ file: string; uploadType?: string; result?: ParseSummary; error?: string }[] | null>(null);
-  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -149,6 +150,19 @@ export default function DataIngestion() {
       setIsExporting(false);
     }
   };
+
+  const logTypes = useMemo(() =>
+    [...new Set(uploadLogs.map((l) => l.uploadType))].sort(),
+  [uploadLogs]);
+
+  const filteredLogs = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    return uploadLogs.filter((l) => {
+      if (historyTypeFilter && l.uploadType !== historyTypeFilter) return false;
+      if (q && !l.fileName.toLowerCase().includes(q) && !l.uploadType.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [uploadLogs, historySearch, historyTypeFilter]);
 
   return (
     <div className="max-w-3xl mx-auto space-y-8">
@@ -339,12 +353,17 @@ export default function DataIngestion() {
 
       {/* Upload History */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        {/* Header row */}
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2">
             <History className="w-5 h-5 text-lgs-red" />
             Upload History
             {uploadLogs.length > 0 && (
-              <span className="text-xs font-normal text-slate-400 ml-1">({uploadLogs.length})</span>
+              <span className="text-xs font-normal text-slate-400 ml-1">
+                {filteredLogs.length !== uploadLogs.length
+                  ? `${filteredLogs.length} of ${uploadLogs.length}`
+                  : uploadLogs.length}
+              </span>
             )}
           </h2>
           <button
@@ -356,81 +375,121 @@ export default function DataIngestion() {
           </button>
         </div>
 
-        <div className="overflow-hidden rounded-lg border border-slate-200">
-          <table className="w-full text-sm text-left table-fixed">
-            <colgroup>
-              <col className="w-[140px]" />
-              <col />
-              <col className="w-[110px]" />
-              <col className="w-[80px]" />
-              <col className="w-[52px]" />
-            </colgroup>
-            <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide border-b border-slate-200">
-              <tr>
-                <th className="px-3 py-2.5">Date</th>
-                <th className="px-3 py-2.5">File Name</th>
-                <th className="px-3 py-2.5">Type</th>
-                <th className="px-3 py-2.5 text-right">Records</th>
-                <th className="px-3 py-2.5"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {uploadLogs.length === 0 ? (
+        {/* Search + filter bar */}
+        {uploadLogs.length > 0 && (
+          <div className="flex gap-2 mb-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search file name…"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                className="w-full pl-8 pr-8 py-1.5 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-lgs-blue outline-none"
+              />
+              {historySearch && (
+                <button
+                  onClick={() => setHistorySearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <select
+              value={historyTypeFilter}
+              onChange={(e) => setHistoryTypeFilter(e.target.value)}
+              className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-lgs-blue outline-none text-slate-600 bg-white"
+            >
+              <option value="">All types</option>
+              {logTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            {(historySearch || historyTypeFilter) && (
+              <button
+                onClick={() => { setHistorySearch(''); setHistoryTypeFilter(''); }}
+                className="px-3 py-1.5 text-xs text-slate-400 hover:text-slate-600 border border-slate-200 rounded-lg transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Scrollable table — fixed height so it never overflows the page */}
+        <div className="rounded-lg border border-slate-200 overflow-hidden">
+          <div className="overflow-y-auto max-h-72">
+            <table className="w-full text-sm text-left table-fixed">
+              <colgroup>
+                <col className="w-[130px]" />
+                <col />
+                <col className="w-[100px]" />
+                <col className="w-[76px]" />
+                <col className="w-[44px]" />
+              </colgroup>
+              <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide border-b border-slate-200 sticky top-0 z-10">
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-slate-400 text-sm">
-                    No files uploaded yet.
-                  </td>
+                  <th className="px-3 py-2.5">Date</th>
+                  <th className="px-3 py-2.5">File Name</th>
+                  <th className="px-3 py-2.5">Type</th>
+                  <th className="px-3 py-2.5 text-right">Records</th>
+                  <th className="px-3 py-2.5"></th>
                 </tr>
-              ) : (
-                uploadLogs.slice(0, historyExpanded ? undefined : 8).map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-3 py-2.5 text-slate-400 text-xs whitespace-nowrap">
-                      {new Date(log.uploadedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}
-                      <span className="block text-slate-300">
-                        {new Date(log.uploadedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 font-medium text-slate-800">
-                      <span
-                        className="block truncate"
-                        title={log.fileName}
-                      >
-                        {log.fileName}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 truncate max-w-full">
-                        {log.uploadType}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-slate-600 tabular-nums">
-                      {log.recordCount.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      <button
-                        onClick={() => setLogToDelete(log)}
-                        className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                        title={`Delete ${log.fileName}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {uploadLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-slate-400 text-sm">
+                      No files uploaded yet.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : filteredLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-slate-400 text-sm">
+                      No results match your search.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-2 text-slate-400 text-xs whitespace-nowrap">
+                        {new Date(log.uploadedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}
+                        <span className="block text-slate-300">
+                          {new Date(log.uploadedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 font-medium text-slate-800">
+                        <span className="block truncate" title={log.fileName}>
+                          {log.fileName}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 truncate max-w-full">
+                          {log.uploadType}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-600 tabular-nums">
+                        {log.recordCount.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          onClick={() => setLogToDelete(log)}
+                          className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                          title={`Delete ${log.fileName}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-
-        {uploadLogs.length > 8 && (
-          <button
-            onClick={() => setHistoryExpanded((v) => !v)}
-            className="mt-3 w-full text-xs text-slate-400 hover:text-lgs-blue transition-colors py-1"
-          >
-            {historyExpanded
-              ? 'Show less'
-              : `Show ${uploadLogs.length - 8} more…`}
-          </button>
+        {filteredLogs.length > 0 && (
+          <p className="mt-2 text-right text-xs text-slate-300">
+            Scroll to see all {filteredLogs.length} {filteredLogs.length === 1 ? 'entry' : 'entries'}
+          </p>
         )}
       </div>
     </div>
