@@ -156,6 +156,9 @@ public class UploadLogDocument
 
     [JsonProperty("blobUrl")]
     public string? BlobUrl { get; set; }
+
+    [JsonProperty("contentHash")]
+    public string? ContentHash { get; set; }
 }
 
 public class ExportLogDocument

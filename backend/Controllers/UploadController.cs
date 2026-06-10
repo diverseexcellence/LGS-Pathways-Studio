@@ -3,6 +3,7 @@ using LgsImpact.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using CsvHelper;
 using System.Globalization;
 using OfficeOpenXml;
@@ -25,9 +26,29 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
         if (ext is not ".csv" and not ".xlsx") return BadRequest(new { message = "Only .csv and .xlsx files accepted" });
 
+        // ── Task 34: duplicate file prevention via SHA-256 content hash ──────────
+        var contentHash = ComputeSha256(file);
+        var existingLog = await cosmos.FindUploadLogByHashAsync(contentHash);
+        if (existingLog is not null)
+            return Conflict(new { message = $"Duplicate file detected. This file was already uploaded on {existingLog.UploadedAt} as \"{existingLog.FileName}\"." });
+
         List<Dictionary<string, string>> rows;
         try { rows = ext == ".csv" ? await ParseCsvAsync(file, ct) : ParseXlsx(file); }
         catch (Exception ex) { return BadRequest(new { message = $"Parse error: {ex.Message}" }); }
+
+        if (rows.Count == 0) return BadRequest(new { message = "The file contains no data rows." });
+
+        var headers = rows[0].Keys.ToList();
+
+        // ── Task 33: required columns check ──────────────────────────────────
+        var schemaError = ValidateSchema(headers, uploadType);
+        if (schemaError is not null)
+            return BadRequest(new { message = $"CSV schema error for \"{uploadType}\": {schemaError}" });
+
+        // ── Task 35: file-type mismatch detection ─────────────────────────────
+        var detectedType = DetectTypeFromColumns(headers);
+        if (detectedType is not null && !detectedType.Equals(uploadType, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = $"File-type mismatch: the file appears to be \"{detectedType}\" data but you selected \"{uploadType}\". Please choose the correct Data Type before uploading." });
 
         string? blobUrl = null;
         try
@@ -42,15 +63,16 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
         await cosmos.CreateUploadLogAsync(new UploadLogDocument
         {
-            Id          = Guid.NewGuid().ToString(),
-            UploadedBy  = CurrentAdminEmail,
-            FileName    = file.FileName,
-            UploadType  = uploadType,
-            UploadedAt  = DateTime.UtcNow.ToString("o"),
-            RecordCount = result.ImportedRows,
+            Id           = Guid.NewGuid().ToString(),
+            UploadedBy   = CurrentAdminEmail,
+            FileName     = file.FileName,
+            UploadType   = uploadType,
+            UploadedAt   = DateTime.UtcNow.ToString("o"),
+            RecordCount  = result.ImportedRows,
             SkippedCount = result.SkippedRows,
-            Errors      = result.Errors,
-            BlobUrl     = blobUrl
+            Errors       = result.Errors,
+            BlobUrl      = blobUrl,
+            ContentHash  = contentHash
         });
 
         await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
@@ -509,4 +531,84 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     }
 
     public record ParseSummaryDto(int TotalRows, int ImportedRows, int SkippedRows, List<string> Errors);
+
+    // ─── Validation helpers ───────────────────────────────────────────────────
+
+    private static string ComputeSha256(IFormFile file)
+    {
+        using var stream = file.OpenReadStream();
+        var hash = SHA256.HashData(stream);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    // Required columns per upload type — at least one column from each group must be present.
+    // Groups are OR-ed within themselves; all groups are AND-ed across.
+    private static readonly Dictionary<string, List<string[]>> RequiredColumnGroups = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["demographics"] = [
+            ["Student_Number", "STN", "State_StudentNumber", "Local Student ID", "STUDENTS.Student_Number"],
+            ["Last name", "Last Name", "FullName", "Full Name", "Student Legal Name", "Legal Last Name", "Student Legal Last Name"],
+        ],
+        ["ILEARN"] = [
+            ["STN", "State_StudentNumber", "Student State ID", "ILEARN Student ID", "Statewide Student ID"],
+            ["Score", "Scale Score", "Performance Level", "Achievement Level"],
+        ],
+        ["IXL"] = [
+            ["Student_Number", "ID", "Local ID", "Local Student Number"],
+            ["SmartScore", "Score", "Diagnostic level"],
+            ["First name", "First Name", "FullName", "Full Name"],
+        ],
+        ["Acadience"] = [
+            ["STN", "Student State ID", "State_StudentNumber"],
+            ["Reading Composite Score", "Score", "Scale Score"],
+        ],
+        ["IREAD"] = [
+            ["STN", "State_StudentNumber", "Student State ID"],
+            ["Status", "Proficiency Level", "Achievement Level"],
+        ],
+    };
+
+    // Signature columns that strongly indicate a given upload type.
+    // Used to detect mismatches (e.g. uploading an ILEARN file as demographics).
+    private static readonly Dictionary<string, string[]> TypeSignatureColumns = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["demographics"] = ["Grade_Level", "Home_Room", "STUDENTS.DOB", "Ethnicity", "ELL", "LunchStatus", "STUDENTS.Student_Number"],
+        ["ILEARN"] = ["Scale Score", "Achievement Level", "ILEARN Student ID", "Performance Level"],
+        ["IXL"] = ["SmartScore", "Diagnostic level", "Date of completion"],
+        ["Acadience"] = ["Reading Composite Score", "Reading Composite Status", "Reading Composite Date", "ALO"],
+        ["IREAD"] = ["I-Read", "IREAD", "Did Not Pass", "Passed", "Reading Grade Level"],
+    };
+
+    // Returns a validation error message, or null if valid.
+    private static string? ValidateSchema(IReadOnlyList<string> headers, string uploadType)
+    {
+        if (!RequiredColumnGroups.TryGetValue(uploadType, out var groups)) return null;
+
+        var headerSet = new HashSet<string>(headers, StringComparer.OrdinalIgnoreCase);
+        foreach (var group in groups)
+        {
+            var found = group.Any(col =>
+                headerSet.Contains(col) ||
+                headers.Any(h => h.Contains(col, StringComparison.OrdinalIgnoreCase)));
+            if (!found)
+                return $"Missing required column — expected one of: {string.Join(", ", group)}";
+        }
+        return null;
+    }
+
+    // Returns the most-likely upload type based on column signatures, or null if ambiguous/unknown.
+    private static string? DetectTypeFromColumns(IReadOnlyList<string> headers)
+    {
+        var headerSet = new HashSet<string>(headers, StringComparer.OrdinalIgnoreCase);
+        string? best = null;
+        int bestScore = 0;
+        foreach (var (type, sigs) in TypeSignatureColumns)
+        {
+            int score = sigs.Count(col =>
+                headerSet.Contains(col) ||
+                headers.Any(h => h.Contains(col, StringComparison.OrdinalIgnoreCase)));
+            if (score > bestScore) { bestScore = score; best = type; }
+        }
+        return bestScore >= 1 ? best : null;
+    }
 }
