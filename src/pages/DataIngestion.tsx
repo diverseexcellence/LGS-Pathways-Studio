@@ -24,6 +24,7 @@ export default function DataIngestion() {
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importResults, setImportResults] = useState<{ file: string; uploadType?: string; result?: ParseSummary; error?: string }[] | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -73,6 +74,7 @@ export default function DataIngestion() {
 
     let lastSummary: ParseSummary | null = null;
     let totalImported = 0;
+    const fileErrors: string[] = [];
 
     for (const file of files) {
       try {
@@ -80,16 +82,24 @@ export default function DataIngestion() {
         lastSummary = summary;
         totalImported += summary.importedRows;
       } catch (err: any) {
-        setStatus({ type: 'error', message: err.message || 'Upload failed' });
-        setIsUploading(false);
-        return;
+        fileErrors.push(`${file.name}: ${err.message || 'Upload failed'}`);
       }
     }
 
+    const succeeded = files.length - fileErrors.length;
     setParseSummary(lastSummary);
+
+    if (fileErrors.length > 0 && succeeded === 0) {
+      setStatus({ type: 'error', message: fileErrors.join(' | ') });
+      setIsUploading(false);
+      return;
+    }
+
     setStatus({
-      type: 'success',
-      message: `Successfully imported ${totalImported} records across ${files.length} file(s).`,
+      type: fileErrors.length > 0 ? 'error' : 'success',
+      message: fileErrors.length > 0
+        ? `${succeeded} of ${files.length} file(s) imported (${totalImported} records). Errors: ${fileErrors.join(' | ')}`
+        : `Successfully imported ${totalImported} records across ${files.length} file(s).`,
     });
     setFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -102,7 +112,7 @@ export default function DataIngestion() {
     setIsDeleting(true);
     try {
       await uploadApi.deleteLog(logToDelete.id);
-      setUploadLogs((prev) => prev.filter((l) => l.exportId !== logToDelete.id));
+      setUploadLogs((prev) => prev.filter((l) => l.id !== logToDelete.id));
       setStatus({ type: 'success', message: `Deleted upload record for ${logToDelete.fileName}.` });
     } catch (err: any) {
       setStatus({ type: 'error', message: err.message || 'Delete failed' });
@@ -174,7 +184,7 @@ export default function DataIngestion() {
       <div>
         <h1 className="text-2xl font-bold text-lgs-blue">Data Upload</h1>
         <p className="text-slate-500 mt-1 text-sm">
-          Upload CSV or Excel student data files. Files are parsed server-side and stored securely in Azure SQL.
+          Upload CSV or Excel student data files. Files are parsed server-side and stored securely in Azure Cosmos DB.
         </p>
       </div>
 
@@ -313,7 +323,7 @@ export default function DataIngestion() {
                 <p className="text-xs text-slate-500">Skipped</p>
               </div>
             </div>
-            {parseSummary.duplicates.length > 0 && (
+            {(parseSummary.duplicates?.length ?? 0) > 0 && (
               <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-3 py-2 mt-2">
                 {parseSummary.duplicates.length} duplicate(s) detected and skipped.
               </p>
@@ -328,11 +338,14 @@ export default function DataIngestion() {
       </div>
 
       {/* Upload History */}
-      <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2">
             <History className="w-5 h-5 text-lgs-red" />
             Upload History
+            {uploadLogs.length > 0 && (
+              <span className="text-xs font-normal text-slate-400 ml-1">({uploadLogs.length})</span>
+            )}
           </h2>
           <button
             onClick={handleExport}
@@ -343,15 +356,22 @@ export default function DataIngestion() {
           </button>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-slate-50 text-slate-600 font-medium border-b border-slate-200">
+        <div className="overflow-hidden rounded-lg border border-slate-200">
+          <table className="w-full text-sm text-left table-fixed">
+            <colgroup>
+              <col className="w-[140px]" />
+              <col />
+              <col className="w-[110px]" />
+              <col className="w-[80px]" />
+              <col className="w-[52px]" />
+            </colgroup>
+            <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase tracking-wide border-b border-slate-200">
               <tr>
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">File Name</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3 text-right">Records</th>
-                <th className="px-4 py-3 text-right">Actions</th>
+                <th className="px-3 py-2.5">Date</th>
+                <th className="px-3 py-2.5">File Name</th>
+                <th className="px-3 py-2.5">Type</th>
+                <th className="px-3 py-2.5 text-right">Records</th>
+                <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -362,19 +382,37 @@ export default function DataIngestion() {
                   </td>
                 </tr>
               ) : (
-                uploadLogs.map((log) => (
+                uploadLogs.slice(0, historyExpanded ? undefined : 8).map((log) => (
                   <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 text-slate-500">{new Date(log.uploadedAt).toLocaleString()}</td>
-                    <td className="px-4 py-3 font-medium text-slate-900">{log.fileName}</td>
-                    <td className="px-4 py-3 text-slate-600">{log.uploadType}</td>
-                    <td className="px-4 py-3 text-right text-slate-700">{log.recordCount.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2.5 text-slate-400 text-xs whitespace-nowrap">
+                      {new Date(log.uploadedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}
+                      <span className="block text-slate-300">
+                        {new Date(log.uploadedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 font-medium text-slate-800">
+                      <span
+                        className="block truncate"
+                        title={log.fileName}
+                      >
+                        {log.fileName}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 truncate max-w-full">
+                        {log.uploadType}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-slate-600 tabular-nums">
+                      {log.recordCount.toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
                       <button
                         onClick={() => setLogToDelete(log)}
-                        className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
-                        title="Delete"
+                        className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                        title={`Delete ${log.fileName}`}
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </td>
                   </tr>
@@ -383,6 +421,17 @@ export default function DataIngestion() {
             </tbody>
           </table>
         </div>
+
+        {uploadLogs.length > 8 && (
+          <button
+            onClick={() => setHistoryExpanded((v) => !v)}
+            className="mt-3 w-full text-xs text-slate-400 hover:text-lgs-blue transition-colors py-1"
+          >
+            {historyExpanded
+              ? 'Show less'
+              : `Show ${uploadLogs.length - 8} more…`}
+          </button>
+        )}
       </div>
     </div>
   );

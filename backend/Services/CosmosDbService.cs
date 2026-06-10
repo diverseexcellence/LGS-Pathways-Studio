@@ -37,6 +37,7 @@ public interface ICosmosDbService
     Task CreateUploadLogAsync(UploadLogDocument log);
     Task<UploadLogDocument?> GetUploadLogAsync(string id);
     Task DeleteUploadLogAsync(string id, string uploadedBy);
+    Task<UploadLogDocument?> FindUploadLogByHashAsync(string contentHash);
 
     // Export Logs
     Task CreateExportLogAsync(ExportLogDocument log);
@@ -431,6 +432,20 @@ public class CosmosDbService : ICosmosDbService
 
     public async Task DeleteUploadLogAsync(string id, string uploadedBy)
         => await UploadLogs.DeleteItemAsync<UploadLogDocument>(id, new PartitionKey(uploadedBy));
+
+    public async Task<UploadLogDocument?> FindUploadLogByHashAsync(string contentHash)
+    {
+        var q = UploadLogs.GetItemLinqQueryable<UploadLogDocument>()
+            .Where(l => l.ContentHash == contentHash)
+            .ToFeedIterator();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            var item = pg.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
 
     // ─── Export Logs ─────────────────────────────────────────────────────────
 
