@@ -51,7 +51,7 @@ public class AiController(
         var promptConfig = await cosmos.GetPromptConfigAsync();
 
         var prompt = piiRedaction.BuildRedactedPrompt(
-            int.Parse(studentId.Replace("s-", "").Replace("-", "")),
+            studentId,
             top20,
             promptTemplate: promptConfig?.Template,
             schoolElaAvg: schoolAvg?.ElaAvgProficiency ?? (schoolAvg?.ElaAvgScore.HasValue == true ? $"{schoolAvg.ElaAvgScore:F0}" : null),

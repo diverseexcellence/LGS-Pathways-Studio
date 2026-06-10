@@ -6,7 +6,7 @@ namespace LgsImpact.Api.Services;
 /// </summary>
 public interface IPiiRedactionService
 {
-    string BuildRedactedPrompt(int studentId, IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments, string? promptTemplate = null, string? schoolElaAvg = null, string? schoolMathAvg = null);
+    string BuildRedactedPrompt(string studentId, IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments, string? promptTemplate = null, string? schoolElaAvg = null, string? schoolMathAvg = null);
     Dictionary<string, string> RedactRawFields(Dictionary<string, string> rawFields);
 }
 
@@ -41,7 +41,7 @@ public class PiiRedactionService : IPiiRedactionService
     }
 
     public string BuildRedactedPrompt(
-        int studentId,
+        string studentId,
         IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments,
         string? promptTemplate = null,
         string? schoolElaAvg = null,
