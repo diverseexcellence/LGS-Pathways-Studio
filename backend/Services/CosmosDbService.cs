@@ -23,6 +23,7 @@ public interface ICosmosDbService
 
     // Assessments
     Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null);
+    Task<List<AssessmentDocument>> GetAllAssessmentsAsync();
     Task CreateAssessmentAsync(AssessmentDocument assessment);
     Task DeleteAssessmentsByFileNameAsync(string fileName);
     Task<int> DeleteAllAssessmentsAsync();
@@ -44,6 +45,12 @@ public interface ICosmosDbService
     Task CreateAuditLogAsync(AuditLogDocument log);
     Task<(List<AuditLogDocument> Items, int Total)> GetAuditLogsAsync(int page, int pageSize, string? eventType);
 
+    // Config (school averages + prompt)
+    Task<SchoolAverageDocument?> GetSchoolAveragesAsync();
+    Task UpsertSchoolAveragesAsync(SchoolAverageDocument doc);
+    Task<PromptConfigDocument?> GetPromptConfigAsync();
+    Task UpsertPromptConfigAsync(PromptConfigDocument doc);
+
     // Seed admins if container is empty
     Task SeedAdminsIfEmptyAsync();
 }
@@ -60,6 +67,7 @@ public class CosmosDbService : ICosmosDbService
     private Container UploadLogs => _client.GetContainer(_databaseId, "upload-logs");
     private Container ExportLogs => _client.GetContainer(_databaseId, "export-logs");
     private Container AuditLogs => _client.GetContainer(_databaseId, "audit-logs");
+    private Container Config => _client.GetContainer(_databaseId, "config");
 
     public CosmosDbService(IConfiguration config)
     {
@@ -320,6 +328,20 @@ public class CosmosDbService : ICosmosDbService
         return items.OrderByDescending(a => a.Date).ToList();
     }
 
+    public async Task<List<AssessmentDocument>> GetAllAssessmentsAsync()
+    {
+        var all = new List<AssessmentDocument>();
+        var q = Assessments.GetItemQueryIterator<AssessmentDocument>(
+            new QueryDefinition("SELECT * FROM c"),
+            requestOptions: new QueryRequestOptions { MaxItemCount = -1 });
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            all.AddRange(pg);
+        }
+        return all;
+    }
+
     public async Task CreateAssessmentAsync(AssessmentDocument assessment)
         => await Assessments.CreateItemAsync(assessment, new PartitionKey(assessment.StudentId));
 
@@ -482,7 +504,41 @@ public class CosmosDbService : ICosmosDbService
             await Admins.CreateItemAsync(admin, new PartitionKey(admin.Email));
     }
 
-    // ─── Ensure containers exist ──────────────────────────────────────────────
+    // ─── Config ───────────────────────────────────────────────────────────────
+
+    public async Task<SchoolAverageDocument?> GetSchoolAveragesAsync()
+    {
+        try
+        {
+            var res = await Config.ReadItemAsync<SchoolAverageDocument>("school-averages", new PartitionKey("school-averages"));
+            return res.Resource;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task UpsertSchoolAveragesAsync(SchoolAverageDocument doc)
+        => await Config.UpsertItemAsync(doc, new PartitionKey(doc.PartitionKey));
+
+    public async Task<PromptConfigDocument?> GetPromptConfigAsync()
+    {
+        try
+        {
+            var res = await Config.ReadItemAsync<PromptConfigDocument>("ai-summary-prompt", new PartitionKey("prompts"));
+            return res.Resource;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task UpsertPromptConfigAsync(PromptConfigDocument doc)
+        => await Config.UpsertItemAsync(doc, new PartitionKey(doc.PartitionKey));
+
+    // ─── Ensure containers exists ─────────────────────────────────────────────
     public static async Task EnsureDatabaseAndContainersAsync(CosmosClient client, string databaseId)
     {
         var db = await client.CreateDatabaseIfNotExistsAsync(databaseId);
@@ -496,6 +552,7 @@ public class CosmosDbService : ICosmosDbService
             ("upload-logs",  "/uploadedBy"),
             ("export-logs",  "/exportedBy"),
             ("audit-logs",   "/adminEmail"),
+            ("config",       "/partitionKey"),
         };
 
         foreach (var (name, partitionKey) in containers)

@@ -212,6 +212,55 @@ public class AuditLogDocument
     public string? UserAgent { get; set; }
 }
 
+public class SchoolAverageDocument
+{
+    [JsonProperty("id")]
+    public string Id { get; set; } = "school-averages";
+
+    [JsonProperty("partitionKey")]
+    public string PartitionKey { get; set; } = "school-averages";
+
+    [JsonProperty("elaAvgProficiency")]
+    public string? ElaAvgProficiency { get; set; }
+
+    [JsonProperty("mathAvgProficiency")]
+    public string? MathAvgProficiency { get; set; }
+
+    [JsonProperty("elaAvgScore")]
+    public double? ElaAvgScore { get; set; }
+
+    [JsonProperty("mathAvgScore")]
+    public double? MathAvgScore { get; set; }
+
+    [JsonProperty("lastUpdated")]
+    public string LastUpdated { get; set; } = DateTime.UtcNow.ToString("o");
+}
+
+public class PromptConfigDocument
+{
+    [JsonProperty("id")]
+    public string Id { get; set; } = "ai-summary-prompt";
+
+    [JsonProperty("partitionKey")]
+    public string PartitionKey { get; set; } = "prompts";
+
+    /// <summary>
+    /// Prompt template. Placeholders: {{studentId}}, {{assessmentData}}, {{schoolContext}}.
+    /// When null the inline default in PiiRedactionService is used.
+    /// </summary>
+    [JsonProperty("template")]
+    public string? Template { get; set; }
+
+    [JsonProperty("version")]
+    public string Version { get; set; } = "1.0";
+
+    [JsonProperty("updatedAt")]
+    public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
+
+    [JsonProperty("updatedBy")]
+    public string? UpdatedBy { get; set; }
+}
+
 public class AdminDocument
 {
     [JsonProperty("id")]

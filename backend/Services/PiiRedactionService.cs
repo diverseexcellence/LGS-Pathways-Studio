@@ -6,7 +6,7 @@ namespace LgsImpact.Api.Services;
 /// </summary>
 public interface IPiiRedactionService
 {
-    string BuildRedactedPrompt(int studentId, IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments);
+    string BuildRedactedPrompt(int studentId, IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments, string? promptTemplate = null, string? schoolElaAvg = null, string? schoolMathAvg = null);
     Dictionary<string, string> RedactRawFields(Dictionary<string, string> rawFields);
 }
 
@@ -40,18 +40,54 @@ public class PiiRedactionService : IPiiRedactionService
         return redacted;
     }
 
-    public string BuildRedactedPrompt(int studentId, IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments)
+    public string BuildRedactedPrompt(
+        int studentId,
+        IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments,
+        string? promptTemplate = null,
+        string? schoolElaAvg = null,
+        string? schoolMathAvg = null)
     {
+        // Proficiency-first: omit raw score; include it only when no proficiency label is available
         var lines = assessments.Select(a =>
-            $"- {a.period} | {a.type} | {a.subject} | Score: {a.score} | Proficiency: {a.proficiency ?? "N/A"}");
+        {
+            var prof = string.IsNullOrWhiteSpace(a.proficiency) ? null : a.proficiency;
+            var detail = prof != null
+                ? $"Proficiency: {prof}"
+                : $"Score: {a.score:F0}";
+            return $"- {a.period} | {a.subject} | {a.type} | {detail}";
+        });
+
+        var schoolContext = "";
+        if (schoolElaAvg != null || schoolMathAvg != null)
+        {
+            var parts = new List<string>();
+            if (schoolElaAvg != null) parts.Add($"school ELA average: {schoolElaAvg}");
+            if (schoolMathAvg != null) parts.Add($"school Math average: {schoolMathAvg}");
+            schoolContext = $"\nSchool benchmarks for context: {string.Join(", ", parts)}.";
+        }
+
+        // Use externalized template when provided (Task 32); fall back to inline default
+        if (!string.IsNullOrWhiteSpace(promptTemplate))
+        {
+            return promptTemplate
+                .Replace("{{studentId}}", studentId.ToString())
+                .Replace("{{assessmentData}}", string.Join("\n", lines))
+                .Replace("{{schoolContext}}", schoolContext);
+        }
 
         // studentId is an internal surrogate — NOT a name, DOB, or any personal identifier
         return $"""
-            You are an educational data analyst. A student (internal reference: S-{studentId}) has the following assessment records.
-            No personal information is included. Summarise academic progress, identify strengths and areas for growth,
-            and recommend intervention strategies if needed. Be concise (3–5 sentences).
+            You are a specialist educational support advisor at LGS, a K-8 school. A student (reference: S-{studentId}) has the following assessment history.
+            No personal information is included.{schoolContext}
 
-            Assessment Data:
+            Write 3–5 sentences of clear, plain-English narrative for an educator audience:
+            1. Lead with the student's current proficiency level in each subject area.
+            2. Highlight any meaningful progress or decline across time periods.
+            3. Note subject-specific strengths compared to school benchmarks where relevant.
+            4. Recommend one or two targeted interventions if the student is below proficiency.
+            Do not quote raw numbers as the primary descriptor — translate them into meaningful statements about the student's learning.
+
+            Assessment Records (most recent first):
             {string.Join("\n", lines)}
             """;
     }
