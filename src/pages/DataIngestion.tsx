@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X } from 'lucide-react';
-import { uploadApi, exportApi, ParseSummary, UploadLog } from '../lib/api';
+import { uploadApi, ParseSummary, UploadLog } from '../lib/api';
 
 const UPLOAD_TYPES = [
   { value: 'demographics', label: 'PowerSchool Demographics' },
@@ -21,7 +21,6 @@ export default function DataIngestion() {
   const [logToDelete, setLogToDelete] = useState<UploadLog | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importResults, setImportResults] = useState<{ file: string; uploadType?: string; result?: ParseSummary; error?: string }[] | null>(null);
   const [historySearch, setHistorySearch] = useState('');
@@ -137,17 +136,6 @@ export default function DataIngestion() {
       setStatus({ type: 'error', message: err.message || 'Import failed' });
     } finally {
       setIsImporting(false);
-    }
-  };
-
-  const handleExport = async () => {
-    setIsExporting(true);
-    try {
-      await exportApi.download();
-    } catch (err: any) {
-      setStatus({ type: 'error', message: err.message || 'Export failed' });
-    } finally {
-      setIsExporting(false);
     }
   };
 
@@ -280,15 +268,8 @@ export default function DataIngestion() {
           {isUploading ? 'Uploading & Parsing…' : 'Upload Data'}
         </button>
 
-        <div className="border-t border-slate-200 pt-4 space-y-3">
-          <button
-            onClick={handleExport}
-            disabled={isExporting}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-700 text-white rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50 transition-colors"
-          >
-            {isExporting ? 'Exporting…' : 'Export All Students (.xlsx)'}
-          </button>
-          <p className="text-xs text-slate-500">
+        <div className="border-t border-slate-200 pt-4">
+          <p className="text-xs text-slate-500 mb-3">
             Or import all files already staged in the Azure <strong>landing-zone</strong> container.
             Upload type is detected automatically from each filename.
           </p>
