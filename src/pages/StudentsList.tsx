@@ -4,8 +4,8 @@ import { AgGridReact } from 'ag-grid-react';
 import { ColDef, GridReadyEvent, IGetRowsParams, GridApi } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
-import { studentsApi, Student } from '../lib/api';
-import { Users, Search, RefreshCw } from 'lucide-react';
+import { studentsApi, exportApi, Student } from '../lib/api';
+import { Users, Search, RefreshCw, Download } from 'lucide-react';
 
 const TierCell = ({ value }: { value: string }) => {
   const tier = value || '';
@@ -133,8 +133,17 @@ export default function StudentsList() {
     }
   }, [search, gridApi, datasource]);
 
+  const [isExporting, setIsExporting] = useState(false);
+
   const handleRefresh = () => {
     if (gridApi) gridApi.setGridOption('datasource', datasource());
+  };
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try { await exportApi.download(); }
+    catch { /* user-visible failure not critical */ }
+    finally { setIsExporting(false); }
   };
 
 
@@ -151,13 +160,23 @@ export default function StudentsList() {
             {isLoading && totalCount === 0 ? 'Loading…' : `${totalCount.toLocaleString()} students`}
           </p>
         </div>
-        <button
-          onClick={handleRefresh}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
-        >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            disabled={isExporting}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-lgs-blue text-white rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            {isExporting ? 'Exporting…' : 'Export (.xlsx)'}
+          </button>
+          <button
+            onClick={handleRefresh}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Search */}
