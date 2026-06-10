@@ -412,11 +412,20 @@ export default function StudentProfile() {
             </div>
             {aiSummary ? (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                <p className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">{aiSummary.summaryText}</p>
+                <p className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">
+                  {(() => {
+                    const firstName = student?.fullName?.trim().split(/\s+/)[0] ?? 'The student';
+                    // Replace the opaque LLM token (e.g. "Student S-abc123", "S-ABC123") with the
+                    // student's first name — substitution happens client-side only, PII never sent to LLM
+                    return aiSummary.summaryText
+                      .replace(/\bStudent\s+S-[A-Za-z0-9-]+/gi, firstName)
+                      .replace(/\bS-[A-Za-z0-9-]+\b/gi, firstName);
+                  })()}
+                </p>
                 <p className="text-xs text-slate-400 mt-3">Generated: {new Date(aiSummary.generatedAt).toLocaleString()}</p>
               </div>
             ) : (
-              <p className="text-slate-500 text-sm">No AI summary yet. Click Generate to create one using local Ollama (PII-free).</p>
+              <p className="text-slate-500 text-sm">No AI summary yet. Click Generate to create one (PII-free).</p>
             )}
           </div>
         </div>
