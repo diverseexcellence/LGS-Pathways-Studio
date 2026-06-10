@@ -69,10 +69,16 @@ builder.Services.AddScoped<IPiiRedactionService, PiiRedactionService>();
 builder.Services.AddScoped<ISchoolAverageService, SchoolAverageService>();
 
 // ─── LLM Provider ─────────────────────────────────────────────────────────────
-// LlmProvider:Name = "meta-llama" → MetaLlamaProvider (production, BRD 10.2)
-// LlmProvider:Name = "ollama" (or unset) → OllamaProvider (local dev)
-var llmProviderName = builder.Configuration["LlmProvider:Name"] ?? "ollama";
-if (llmProviderName.Equals("meta-llama", StringComparison.OrdinalIgnoreCase))
+// LlmProvider:Name = "groq"      → GroqProvider      (free hosted, no infra — default for Azure)
+// LlmProvider:Name = "meta-llama"→ MetaLlamaProvider (self-hosted Ollama serving Llama)
+// LlmProvider:Name = "ollama"    → OllamaProvider    (local dev, any model)
+var llmProviderName = builder.Configuration["LlmProvider:Name"] ?? "groq";
+if (llmProviderName.Equals("groq", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddScoped<ILlmProvider, GroqProvider>();
+    builder.Services.AddScoped<ILlmService, GroqProvider>();
+}
+else if (llmProviderName.Equals("meta-llama", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddScoped<ILlmProvider, MetaLlamaProvider>();
     builder.Services.AddScoped<ILlmService, MetaLlamaProvider>();
@@ -85,6 +91,7 @@ else
 
 builder.Services.AddScoped<IBlobStorageService, BlobStorageService>();
 builder.Services.AddHttpClient("ollama").SetHandlerLifetime(TimeSpan.FromMinutes(5));
+builder.Services.AddHttpClient("llm").SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
 builder.Services.AddHsts(options =>
 {
