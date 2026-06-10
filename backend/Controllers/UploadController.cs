@@ -12,7 +12,7 @@ namespace LgsImpact.Api.Controllers;
 [ApiController]
 [Route("api/upload")]
 [Authorize]
-public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction) : ControllerBase
+public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction, ISchoolAverageService schoolAverages) : ControllerBase
 {
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
@@ -57,6 +57,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             AuditEventType.Upload, entityType: "Upload", entityId: file.FileName,
             details: $"Uploaded {file.FileName} ({uploadType}) — {result.ImportedRows} rows, {result.SkippedRows} skipped",
             ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        // Refresh cached school averages after any assessment upload (fire-and-forget, non-blocking)
+        _ = Task.Run(() => schoolAverages.RefreshAsync());
 
         return Ok(result);
     }

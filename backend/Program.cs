@@ -66,7 +66,23 @@ builder.Services.AddSingleton<ICosmosDbService, CosmosDbService>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IPiiRedactionService, PiiRedactionService>();
-builder.Services.AddScoped<ILlmService, OllamaService>();
+builder.Services.AddScoped<ISchoolAverageService, SchoolAverageService>();
+
+// ─── LLM Provider ─────────────────────────────────────────────────────────────
+// LlmProvider:Name = "meta-llama" → MetaLlamaProvider (production, BRD 10.2)
+// LlmProvider:Name = "ollama" (or unset) → OllamaProvider (local dev)
+var llmProviderName = builder.Configuration["LlmProvider:Name"] ?? "ollama";
+if (llmProviderName.Equals("meta-llama", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddScoped<ILlmProvider, MetaLlamaProvider>();
+    builder.Services.AddScoped<ILlmService, MetaLlamaProvider>();
+}
+else
+{
+    builder.Services.AddScoped<ILlmProvider, OllamaProvider>();
+    builder.Services.AddScoped<ILlmService, OllamaProvider>();
+}
+
 builder.Services.AddScoped<IBlobStorageService, BlobStorageService>();
 builder.Services.AddHttpClient("ollama").SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
