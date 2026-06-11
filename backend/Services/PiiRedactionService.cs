@@ -6,7 +6,7 @@ namespace LgsImpact.Api.Services;
 /// </summary>
 public interface IPiiRedactionService
 {
-    string BuildRedactedPrompt(string studentId, IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments, string? promptTemplate = null, string? schoolElaAvg = null, string? schoolMathAvg = null);
+    string BuildRedactedPrompt(string studentId, IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments, string? grade = null, string? promptTemplate = null, string? schoolElaAvg = null, string? schoolMathAvg = null);
     Dictionary<string, string> RedactRawFields(Dictionary<string, string> rawFields);
 }
 
@@ -43,16 +43,19 @@ public class PiiRedactionService : IPiiRedactionService
     public string BuildRedactedPrompt(
         string studentId,
         IEnumerable<(string subject, string type, double score, string? proficiency, string period)> assessments,
+        string? grade = null,
         string? promptTemplate = null,
         string? schoolElaAvg = null,
         string? schoolMathAvg = null)
     {
-        // Proficiency-first: omit raw score; include it only when no proficiency label is available
-        var lines = assessments.Select(a =>
+        var assessmentList = assessments.ToList();
+
+        // Include both proficiency label and score for each record
+        var lines = assessmentList.Select(a =>
         {
             var prof = string.IsNullOrWhiteSpace(a.proficiency) ? null : a.proficiency;
             var detail = prof != null
-                ? $"Proficiency: {prof}"
+                ? $"Proficiency: {prof}, Score: {a.score:F0}"
                 : $"Score: {a.score:F0}";
             return $"- {a.period} | {a.subject} | {a.type} | {detail}";
         });
@@ -71,21 +74,57 @@ public class PiiRedactionService : IPiiRedactionService
         {
             return promptTemplate
                 .Replace("{{studentId}}", studentId.ToString())
+                .Replace("{{grade}}", grade ?? "Unknown")
                 .Replace("{{assessmentData}}", string.Join("\n", lines))
                 .Replace("{{schoolContext}}", schoolContext);
         }
 
+        var gradeLabel = string.IsNullOrWhiteSpace(grade) ? "" : $" – Grade {grade}";
+        var refId = studentId.ToUpper().Replace("S-S-", "S-");
+
         // studentId is an internal surrogate — NOT a name, DOB, or any personal identifier
         return $"""
-            You are a specialist educational support advisor at LGS, a K-8 school. A student (reference: {studentId.ToUpper().Replace("S-S-", "S-")}) has the following assessment history.
+            You are a specialist educational support advisor at LGS, a K-8 school.
+            Produce a structured academic progress summary for student reference {refId}{gradeLabel}.
             No personal information is included.{schoolContext}
 
-            Write 3–5 sentences of clear, plain-English narrative for an educator audience:
-            1. Lead with the student's current proficiency level in each subject area.
-            2. Highlight any meaningful progress or decline across time periods.
-            3. Note subject-specific strengths compared to school benchmarks where relevant.
-            4. Recommend one or two targeted interventions if the student is below proficiency.
-            Do not quote raw numbers as the primary descriptor — translate them into meaningful statements about the student's learning.
+            Output your response in the following Markdown format exactly:
+
+            ## AI Assistant Summary
+            **Student Academic Progress Summary{gradeLabel}**
+
+            [One sentence overview of the student's overall performance pattern across subjects.]
+
+            Scores are included for reference, but proficiency status is used as the main indicator of performance.
+
+            ### ELA Performance
+            [One sentence describing the overall ELA trend.]
+
+            [Bullet list: one bullet per ELA assessment record in format: **[assessment name]** was marked [proficiency] with a score of [score].]
+
+            [One paragraph summarising the ELA trend and what the latest result means.]
+
+            ### Math Performance
+            [One sentence describing the overall Math trend.]
+
+            [Bullet list: one bullet per Math assessment record in format: **[assessment name]** was marked [proficiency] with a score of [score].]
+
+            [One paragraph summarising the Math trend and what the latest result means.]
+
+            [One concluding sentence comparing ELA and Math overall.]
+
+            ### Suggestions
+            - [Suggestion 1 — specific to lowest-performing subject]
+            - [Suggestion 2 — how the low subject should influence the tier decision]
+            - [Suggestion 3 — monitoring recommendation for stronger subject]
+            - Use the system-suggested tier as a starting point, with the final tier reviewed and finalized by the Administrator.
+
+            Rules:
+            - Group all ELA assessments under ELA Performance; all Math assessments under Math Performance; any other subjects get their own section using the same structure.
+            - If a subject has no assessments, omit that section entirely.
+            - Do not invent data. Only reference assessments provided below.
+            - Use plain language suitable for an educator audience.
+            - Never include the student's name, date of birth, or any personal identifier.
 
             Assessment Records (most recent first):
             {string.Join("\n", lines)}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { studentsApi, assessmentsApi, aiApi, Student, Assessment, AISummary } from '../lib/api';
@@ -412,16 +413,21 @@ export default function StudentProfile() {
             </div>
             {aiSummary ? (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                <p className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">
-                  {(() => {
-                    const firstName = student?.fullName?.trim().split(/\s+/)[0] ?? 'The student';
-                    // Replace the opaque LLM token (e.g. "Student S-abc123", "S-ABC123") with the
-                    // student's first name — substitution happens client-side only, PII never sent to LLM
-                    return aiSummary.summaryText
-                      .replace(/\bStudent\s+S-[A-Za-z0-9-]+/gi, firstName)
-                      .replace(/\bS-[A-Za-z0-9-]+\b/gi, firstName);
-                  })()}
-                </p>
+                <div className="text-sm text-slate-800 leading-relaxed prose prose-sm max-w-none
+                  prose-headings:text-slate-800 prose-headings:font-semibold
+                  prose-h2:text-base prose-h2:mt-2 prose-h2:mb-1
+                  prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+                  prose-ul:my-1 prose-li:my-0.5
+                  prose-p:my-1">
+                  <ReactMarkdown>
+                    {(() => {
+                      const firstName = student?.fullName?.trim().split(/\s+/)[0] ?? 'The student';
+                      return aiSummary.summaryText
+                        .replace(/\bStudent\s+S-[A-Za-z0-9-]+/gi, firstName)
+                        .replace(/\bS-[A-Za-z0-9-]+\b/gi, firstName);
+                    })()}
+                  </ReactMarkdown>
+                </div>
                 <p className="text-xs text-slate-400 mt-3">Generated: {new Date(aiSummary.generatedAt).toLocaleString()}</p>
               </div>
             ) : (
