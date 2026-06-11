@@ -159,7 +159,7 @@ export default function DataIngestion() {
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6">
             <h3 className="text-lg font-bold text-slate-900 mb-2">Delete Upload Record</h3>
-            <p className="text-slate-600 text-sm mb-6">
+            <p className="text-slate-600 text-sm mb-6 break-all">
               Delete upload record for <strong>{logToDelete.fileName}</strong>? Associated assessment
               records will also be removed from the database.
             </p>

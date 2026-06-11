@@ -53,6 +53,7 @@ public class AiController(
         var prompt = piiRedaction.BuildRedactedPrompt(
             studentId,
             top20,
+            grade: student.Grade,
             promptTemplate: promptConfig?.Template,
             schoolElaAvg: schoolAvg?.ElaAvgProficiency ?? (schoolAvg?.ElaAvgScore.HasValue == true ? $"{schoolAvg.ElaAvgScore:F0}" : null),
             schoolMathAvg: schoolAvg?.MathAvgProficiency ?? (schoolAvg?.MathAvgScore.HasValue == true ? $"{schoolAvg.MathAvgScore:F0}" : null));
