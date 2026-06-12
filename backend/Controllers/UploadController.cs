@@ -379,9 +379,16 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                                      "Student State Number", "State Student ID Number",
                                      "Student ID", "ILEARN Student ID", "IREAD Student ID",
                                      "Statewide Student ID", "State Student Identifier");
-                    var localId = GetVal(row, "ID", "Student_Number", "Student Number",
+                    var localId = GetVal(row, "Student_Number", "Student Number",
                                          "Local ID", "Local Student ID", "School ID",
                                          "Local Student Number");
+
+                    // IXL LevelUp exports use "ID" column which is actually the STN (state student number)
+                    if (string.IsNullOrWhiteSpace(stn) && uploadType == "IXL")
+                        stn = GetVal(row, "ID");
+                    else if (string.IsNullOrWhiteSpace(localId))
+                        localId = GetVal(row, "ID");
+
                     if (!string.IsNullOrWhiteSpace(stn))
                         student = await cosmos.FindStudentByStnAsync(stn);
                     if (student is null && !string.IsNullOrWhiteSpace(localId))
@@ -398,6 +405,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     if (student is null && !string.IsNullOrWhiteSpace(localId))
                         student = await cosmos.FindStudentByLocalIdAsync(localId);
 
+                    // Only auto-create for IXL classic format (has student name); LevelUp format has no name column
                     if (student is null && uploadType == "IXL" && !string.IsNullOrWhiteSpace(name))
                     {
                         var newId = $"s-{Guid.NewGuid():N}";
@@ -420,14 +428,16 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     if (student is null) { skipped++; continue; }
 
                     var scoreRaw = GetVal(row, "Score", "Scale Score", "Overall Score",
-                                         "Overall ELA score", "Overall reading score",
+                                         "Overall ELA score", "Overall math score", "Overall reading score",
+                                         "Overall math scale score", "Overall ELA scale score",
                                          "Reading Composite Score", "Diagnostic level", "SmartScore");
                     double.TryParse(scoreRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var score);
 
                     var subject = GetVal(row, "Subject", "Content Area", "Test Subject")
                                   ?? DetectSubject(uploadType, fileName);
                     var rawProficiency = GetVal(row, "Proficiency Level", "Performance Level",
-                                            "Status", "Achievement Level", "Overall ELA tier",
+                                            "Status", "Achievement Level",
+                                            "Overall math tier", "Overall ELA tier", "Overall reading tier",
                                             "Reading Composite Status");
                     var periodRaw = GetVal(row, "Period", "Term", "School Year",
                                         "Benchmark Period", "Test OppNumber");
@@ -658,8 +668,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         ],
         ["IXL"] = [
             ["Student_Number", "ID", "Local ID", "Local Student Number"],
-            ["SmartScore", "Score", "Diagnostic level"],
-            ["First name", "First Name", "FullName", "Full Name"],
+            ["SmartScore", "Score", "Diagnostic level", "Overall math score", "Overall ELA score", "Overall math tier", "Overall ELA tier"],
         ],
         ["Acadience"] = [
             ["STN", "Student State ID", "State_StudentNumber"],
