@@ -281,6 +281,21 @@ export default function DataIngestion() {
           {isUploading ? 'Uploading & Parsing…' : 'Upload Data'}
         </button>
 
+        <div className="relative flex items-center gap-3 py-2">
+          <div className="flex-1 border-t border-slate-200" />
+          <span className="text-xs text-slate-400 font-medium uppercase tracking-wide">or</span>
+          <div className="flex-1 border-t border-slate-200" />
+        </div>
+
+        <button
+          onClick={handleImportLandingZone}
+          disabled={isImporting}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
+        >
+          <CloudDownload className="w-5 h-5" />
+          {isImporting ? 'Importing from Landing Zone…' : 'Import from Landing Zone'}
+        </button>
+
 
         {importResults && importResults.length > 0 && (
           <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 text-sm space-y-2">
