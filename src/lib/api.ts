@@ -220,6 +220,23 @@ export const exportApi = {
     a.click();
     URL.revokeObjectURL(url);
   },
+
+  unmatchedStns: async () => {
+    const token = getMemoryToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`${API_BASE}/api/export/unmatched-stns`, { headers });
+    if (!res.ok) throw new Error('Failed to generate unmatched STN report');
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `unmatched-stns-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // ─── AI Summaries ─────────────────────────────────────────────────────────────

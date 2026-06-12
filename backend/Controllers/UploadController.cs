@@ -358,7 +358,8 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     var stn = GetVal(row, "STN", "Student State ID", "State_StudentNumber",
                                      "State Student Number", "State ID", "SSID",
                                      "Student State Number", "State Student ID Number",
-                                     "Student ID", "ILEARN Student ID", "Statewide Student ID");
+                                     "Student ID", "ILEARN Student ID", "IREAD Student ID",
+                                     "Statewide Student ID", "State Student Identifier");
                     var localId = GetVal(row, "ID", "Student_Number", "Student Number",
                                          "Local ID", "Local Student ID", "School ID",
                                          "Local Student Number");
@@ -406,13 +407,26 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
                     var subject = GetVal(row, "Subject", "Content Area", "Test Subject")
                                   ?? DetectSubject(uploadType, fileName);
-                    var proficiency = GetVal(row, "Proficiency Level", "Performance Level",
+                    var rawProficiency = GetVal(row, "Proficiency Level", "Performance Level",
                                             "Status", "Achievement Level", "Overall ELA tier",
                                             "Reading Composite Status");
-                    var period = GetVal(row, "Period", "Term", "School Year",
+                    var periodRaw = GetVal(row, "Period", "Term", "School Year",
                                         "Benchmark Period", "Test OppNumber");
                     var date = GetVal(row, "Date", "Date Taken", "Date of completion",
                                       "Test Date", "Reading Composite Date");
+
+                    // Task 13: normalise I-Read pass/fail → standard proficiency labels
+                    var proficiency = uploadType.Equals("IREAD", StringComparison.OrdinalIgnoreCase)
+                        ? NormalizeIReadProficiency(rawProficiency)
+                        : rawProficiency;
+
+                    // Task 12: normalise Acadience period (BOY/MOY/EOY)
+                    // Task 11: normalise ILEARN period (CP1/CP2/CP3)
+                    var period = uploadType.Equals("Acadience", StringComparison.OrdinalIgnoreCase)
+                        ? NormalizeAcadiencePeriod(periodRaw, fileName)
+                        : uploadType.Equals("ILEARN", StringComparison.OrdinalIgnoreCase)
+                            ? NormalizeIlearnPeriod(periodRaw, fileName)
+                            : periodRaw;
 
                     await cosmos.CreateAssessmentAsync(new AssessmentDocument
                     {
@@ -444,26 +458,87 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
     private static string DetectSubject(string uploadType, string fileName)
     {
+        // Acadience and I-Read are always Reading — must check before generic ELA/Reading check
+        if (uploadType.Equals("Acadience", StringComparison.OrdinalIgnoreCase) ||
+            uploadType.Equals("IREAD", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("Acadience", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("IREAD", StringComparison.OrdinalIgnoreCase) ||
+            fileName.Contains("I-READ", StringComparison.OrdinalIgnoreCase)) return "Reading";
+
         if (uploadType.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
             fileName.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
             fileName.Contains("English", StringComparison.OrdinalIgnoreCase) ||
             fileName.Contains("EnglishLanguageArts", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("Language", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("Reading", StringComparison.OrdinalIgnoreCase)) return "ELA";
+            fileName.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
         if (uploadType.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
             fileName.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
             fileName.Contains("Mathematics", StringComparison.OrdinalIgnoreCase)) return "Math";
+
+        // ILEARN without ELA/Math in filename — store as Mixed; tier engine will treat as unknown
         return "Mixed";
     }
 
     private static string NormalizeSubject(string? subject)
     {
         if (subject is null) return "Mixed";
+        if (subject.Equals("Reading", StringComparison.OrdinalIgnoreCase)) return "Reading";
         if (subject.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
             subject.Contains("English", StringComparison.OrdinalIgnoreCase) ||
             subject.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
         if (subject.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
         return subject;
+    }
+
+    // Maps I-Read pass/fail status strings → standard proficiency labels (BRD task 13)
+    private static string? NormalizeIReadProficiency(string? raw)
+    {
+        if (raw is null) return null;
+        var v = raw.Trim();
+        if (v.Contains("Did Not Pass", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("Fail", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("F", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("Not Passed", StringComparison.OrdinalIgnoreCase)) return "Below Proficiency";
+        if (v.Equals("Passed", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("Pass", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("P", StringComparison.OrdinalIgnoreCase)) return "At Proficiency";
+        if (v.Contains("Waived", StringComparison.OrdinalIgnoreCase)) return "Waived";
+        if (v.Contains("Exempt", StringComparison.OrdinalIgnoreCase)) return "Exempt";
+        return raw; // preserve unrecognised values as-is
+    }
+
+    // Extracts BOY/MOY/EOY period tag from Acadience filename or Period column value
+    private static string? NormalizeAcadiencePeriod(string? periodCol, string fileName)
+    {
+        var candidates = new[] { periodCol ?? "", fileName };
+        foreach (var s in candidates)
+        {
+            if (s.Contains("BOY", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Beginning", StringComparison.OrdinalIgnoreCase)) return "BOY";
+            if (s.Contains("MOY", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Middle", StringComparison.OrdinalIgnoreCase)) return "MOY";
+            if (s.Contains("EOY", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("End", StringComparison.OrdinalIgnoreCase)) return "EOY";
+        }
+        return periodCol; // fall back to whatever is in the column
+    }
+
+    // Extracts ILEARN checkpoint number from filename (CP1, CP2, CP3, Checkpoint1…)
+    private static string? NormalizeIlearnPeriod(string? periodCol, string fileName)
+    {
+        var candidates = new[] { periodCol ?? "", fileName };
+        foreach (var s in candidates)
+        {
+            if (s.Contains("CP1", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Checkpoint1", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Checkpoint 1", StringComparison.OrdinalIgnoreCase)) return "CP1";
+            if (s.Contains("CP2", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Checkpoint2", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Checkpoint 2", StringComparison.OrdinalIgnoreCase)) return "CP2";
+            if (s.Contains("CP3", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Checkpoint3", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("Checkpoint 3", StringComparison.OrdinalIgnoreCase)) return "CP3";
+        }
+        return periodCol;
     }
 
     private static string? GetVal(Dictionary<string, string> row, params string[] keys)

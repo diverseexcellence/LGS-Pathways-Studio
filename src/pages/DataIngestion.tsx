@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X } from 'lucide-react';
-import { uploadApi, ParseSummary, UploadLog } from '../lib/api';
+import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X, ShieldAlert, Download } from 'lucide-react';
+import { uploadApi, exportApi, ParseSummary, UploadLog } from '../lib/api';
 
 const UPLOAD_TYPES = [
   { value: 'demographics', label: 'PowerSchool Demographics' },
@@ -25,6 +25,8 @@ export default function DataIngestion() {
   const [importResults, setImportResults] = useState<{ file: string; uploadType?: string; result?: ParseSummary; error?: string }[] | null>(null);
   const [historySearch, setHistorySearch] = useState('');
   const [historyTypeFilter, setHistoryTypeFilter] = useState('');
+  const [isExportingStns, setIsExportingStns] = useState(false);
+  const [stnExportStatus, setStnExportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -136,6 +138,19 @@ export default function DataIngestion() {
       setStatus({ type: 'error', message: err.message || 'Import failed' });
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleExportUnmatchedStns = async () => {
+    setIsExportingStns(true);
+    setStnExportStatus(null);
+    try {
+      await exportApi.unmatchedStns();
+      setStnExportStatus({ type: 'success', message: 'Unmatched STN report downloaded.' });
+    } catch (err: any) {
+      setStnExportStatus({ type: 'error', message: err.message || 'Export failed' });
+    } finally {
+      setIsExportingStns(false);
     }
   };
 
@@ -468,6 +483,40 @@ export default function DataIngestion() {
           <p className="mt-2 text-right text-xs text-slate-300">
             Scroll to see all {filteredLogs.length} {filteredLogs.length === 1 ? 'entry' : 'entries'}
           </p>
+        )}
+      </div>
+
+      {/* Data Quality */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2 mb-1">
+          <ShieldAlert className="w-5 h-5 text-lgs-red" />
+          Data Quality
+        </h2>
+        <p className="text-sm text-slate-500 mb-4">
+          Download a report of assessment records whose STN does not match any enrolled student.
+          Use this to identify file mismatches or missing demographic uploads.
+        </p>
+
+        <button
+          onClick={handleExportUnmatchedStns}
+          disabled={isExportingStns}
+          className="flex items-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors text-sm"
+        >
+          <Download className="w-4 h-4" />
+          {isExportingStns ? 'Generating report…' : 'Download Unmatched STN Report'}
+        </button>
+
+        {stnExportStatus && (
+          <div className={`mt-3 p-3 rounded-lg flex items-center gap-2 text-sm ${
+            stnExportStatus.type === 'success'
+              ? 'bg-green-50 text-green-800 border border-green-200'
+              : 'bg-red-50 text-red-800 border border-red-200'
+          }`}>
+            {stnExportStatus.type === 'success'
+              ? <CheckCircle className="w-4 h-4 shrink-0" />
+              : <AlertCircle className="w-4 h-4 shrink-0" />}
+            {stnExportStatus.message}
+          </div>
         )}
       </div>
     </div>

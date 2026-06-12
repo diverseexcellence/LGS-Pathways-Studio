@@ -50,11 +50,24 @@ function normalizeSubject(s: string) {
 }
 
 function normalizeProficiency(p: string) {
-  const l = p.toLowerCase();
+  const l = p.toLowerCase().trim();
+  // Already-normalised labels from backend — pass through as-is
+  if (l === 'below proficiency') return 'Below Proficiency';
+  if (l === 'approaching proficiency') return 'Approaching Proficiency';
+  if (l === 'above proficiency') return 'Above Proficiency';
+  if (l === 'at proficiency') return 'At Proficiency';
+  // Keyword matching for raw values that bypass normalisation
+  if (l.includes('far below') || l.includes('did not pass') || l === 'fail' || l === 'f' || l === 'not passed') return 'Below Proficiency';
   if (l.includes('below')) return 'Below Proficiency';
   if (l.includes('approaching')) return 'Approaching Proficiency';
-  if (l.includes('above')) return 'Above Proficiency';
-  if (l.includes('at prof') || l === 'at' || l === 'proficient') return 'At Proficiency';
+  if (l.includes('above') || l.includes('exceeds')) return 'Above Proficiency';
+  if (l.includes('at prof') || l === 'at' || l === 'proficient' || l === 'meets' ||
+      l === 'passed' || l === 'pass' || l === 'p') return 'At Proficiency';
+  // I-Read raw "Yes" = passed the I-Read test = At Proficiency
+  if (l === 'yes') return 'At Proficiency';
+  // I-Read raw "No" = did not pass = Below Proficiency
+  if (l === 'no') return 'Below Proficiency';
+  if (l === 'waived' || l === 'exempt') return p;
   return p;
 }
 
