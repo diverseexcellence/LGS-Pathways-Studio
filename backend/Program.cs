@@ -98,6 +98,7 @@ else
     builder.Services.AddScoped<ILlmService, OllamaProvider>();
 }
 
+builder.Services.AddScoped<ITierCalculationService, TierCalculationService>();
 builder.Services.AddScoped<IBlobStorageService, BlobStorageService>();
 builder.Services.AddHttpClient("ollama").SetHandlerLifetime(TimeSpan.FromMinutes(5));
 builder.Services.AddHttpClient("llm").SetHandlerLifetime(TimeSpan.FromMinutes(5));

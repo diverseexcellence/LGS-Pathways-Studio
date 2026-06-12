@@ -43,9 +43,11 @@ public class StudentDocument
     [JsonProperty("homeRoom")]
     public string? HomeRoom { get; set; }
 
+    /// <summary>Tier value: "1", "2", "3", or "Pending".</summary>
     [JsonProperty("tier")]
     public string Tier { get; set; } = "Pending";
 
+    /// <summary>Workflow state: "Pending" | "System Recommended" | "Finalized".</summary>
     [JsonProperty("tierStatus")]
     public string TierStatus { get; set; } = "Pending";
 
