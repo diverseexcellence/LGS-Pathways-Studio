@@ -254,3 +254,17 @@ export const aiApi = {
 export const auditApi = {
   list: () => request<any[]>('/api/audit'),
 };
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+
+export interface GradeRow { grade: string; tier1: number; tier2: number; tier3: number; total: number }
+export interface TeacherRow { teacher: string; tier1: number; tier2: number; tier3: number; total: number }
+export interface DrillStudent { studentId: string; fullName: string; tier: string; tierStatus: string; classGroup: string; homeRoom: string | null }
+
+export const dashboardApi = {
+  getTargetGoal: () => request<{ goalPct: number; updatedAt: string; updatedBy: string | null }>('/api/dashboard/target-goal'),
+  setTargetGoal: (goalPct: number) => request<{ goalPct: number }>('/api/dashboard/target-goal', { method: 'PUT', body: JSON.stringify({ goalPct }) }),
+  byGrade: () => request<GradeRow[]>('/api/dashboard/by-grade'),
+  teachersByGrade: (grade: string) => request<TeacherRow[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/teachers`),
+  studentsByGrade: (grade: string) => request<DrillStudent[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/students`),
+};

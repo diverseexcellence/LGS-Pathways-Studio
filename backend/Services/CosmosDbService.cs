@@ -52,6 +52,10 @@ public interface ICosmosDbService
     Task<PromptConfigDocument?> GetPromptConfigAsync();
     Task UpsertPromptConfigAsync(PromptConfigDocument doc);
 
+    // Target Goal config
+    Task<TargetGoalDocument> GetTargetGoalAsync();
+    Task UpsertTargetGoalAsync(TargetGoalDocument doc);
+
     // Seed admins if container is empty
     Task SeedAdminsIfEmptyAsync();
 }
@@ -551,6 +555,19 @@ public class CosmosDbService : ICosmosDbService
     }
 
     public async Task UpsertPromptConfigAsync(PromptConfigDocument doc)
+        => await Config.UpsertItemAsync(doc, new PartitionKey(doc.PartitionKey));
+
+    public async Task<TargetGoalDocument> GetTargetGoalAsync()
+    {
+        try
+        {
+            var resp = await Config.ReadItemAsync<TargetGoalDocument>("target-goal", new PartitionKey("config"));
+            return resp.Resource;
+        }
+        catch (CosmosException) { return new TargetGoalDocument(); }
+    }
+
+    public async Task UpsertTargetGoalAsync(TargetGoalDocument doc)
         => await Config.UpsertItemAsync(doc, new PartitionKey(doc.PartitionKey));
 
     // ─── Ensure containers exists ─────────────────────────────────────────────

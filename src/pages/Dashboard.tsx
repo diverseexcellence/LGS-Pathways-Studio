@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TrendingUp, Award, Users, Target, Download, Info } from 'lucide-react';
-import { studentsApi, Student, PagedResult } from '../lib/api';
+import { TrendingUp, Award, Users, Target, Info, ChevronRight, ChevronLeft, Pencil, Check, X } from 'lucide-react';
+import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent } from '../lib/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
   BarChart, Bar
 } from 'recharts';
-import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
 const defaultCenter: [number, number] = [39.7684, -86.1581];
 
+// Hardcoded timeline until Task 20 real data endpoint is available
 const timelineData = [
   { month: 'Sep', ela: 42, math: 38 },
   { month: 'Oct', ela: 45, math: 42 },
@@ -30,6 +31,7 @@ interface Stats {
   tier2Count: number;
   tier3Count: number;
   totalStudents: number;
+  activeCaseload: number;
   gradeData: { grade: string; proficient: number; developing: number; critical: number }[];
   homeRoomData: { homeRoom: string; initials: string; 'Tier 1': number; 'Tier 2': number; 'Tier 3': number; total: number }[];
 }
@@ -39,27 +41,32 @@ function buildStats(students: Student[]): Stats {
   const gradeMap: Record<string, { proficient: number; developing: number; critical: number }> = {};
   const homeRoomMap: Record<string, { tier1: number; tier2: number; tier3: number }> = {};
 
+  // Active caseload = all active students regardless of tier status
+  const activeCaseload = students.filter(s => s.isActive).length;
+
   for (const s of students) {
     const tier = s.tier || 'Pending';
+    const tierStatus = s.tierStatus || 'Pending';
     const grade = s.grade ? `Grade ${String(s.grade).replace(/^0+(?=\d)/, '')}` : 'Unknown';
     const homeRoom = s.classGroup || 'Unassigned';
+
+    // Only count tiered (non-Pending tierStatus) students in distribution aggregations
+    if (tierStatus === 'Pending') continue;
 
     if (tier === 'Tier 1') t1++;
     else if (tier === 'Tier 2') t2++;
     else if (tier === 'Tier 3') t3++;
 
-    if (tier !== 'Pending') {
-      if (!homeRoomMap[homeRoom]) homeRoomMap[homeRoom] = { tier1: 0, tier2: 0, tier3: 0 };
-      if (tier === 'Tier 1') homeRoomMap[homeRoom].tier1++;
-      else if (tier === 'Tier 2') homeRoomMap[homeRoom].tier2++;
-      else if (tier === 'Tier 3') homeRoomMap[homeRoom].tier3++;
+    if (!homeRoomMap[homeRoom]) homeRoomMap[homeRoom] = { tier1: 0, tier2: 0, tier3: 0 };
+    if (tier === 'Tier 1') homeRoomMap[homeRoom].tier1++;
+    else if (tier === 'Tier 2') homeRoomMap[homeRoom].tier2++;
+    else if (tier === 'Tier 3') homeRoomMap[homeRoom].tier3++;
 
-      if (grade !== 'Unknown') {
-        if (!gradeMap[grade]) gradeMap[grade] = { proficient: 0, developing: 0, critical: 0 };
-        if (tier === 'Tier 1') gradeMap[grade].proficient++;
-        else if (tier === 'Tier 2') gradeMap[grade].developing++;
-        else if (tier === 'Tier 3') gradeMap[grade].critical++;
-      }
+    if (grade !== 'Unknown') {
+      if (!gradeMap[grade]) gradeMap[grade] = { proficient: 0, developing: 0, critical: 0 };
+      if (tier === 'Tier 1') gradeMap[grade].proficient++;
+      else if (tier === 'Tier 2') gradeMap[grade].developing++;
+      else if (tier === 'Tier 3') gradeMap[grade].critical++;
     }
   }
 
@@ -102,35 +109,51 @@ function buildStats(students: Student[]): Stats {
     tier2Count: t2,
     tier3Count: t3,
     totalStudents: t1 + t2 + t3,
-    gradeData: gradeData.length ? gradeData : [
-      { grade: 'Grade 1', proficient: 60, developing: 25, critical: 15 },
-      { grade: 'Grade 2', proficient: 55, developing: 30, critical: 15 },
-      { grade: 'Grade 3', proficient: 50, developing: 35, critical: 15 },
-    ],
+    activeCaseload,
+    gradeData: gradeData.length ? gradeData : [],
     homeRoomData,
   };
 }
 
+// ─── Drill-down types ──────────────────────────────────────────────────────────
+
+type DrillView =
+  | { level: 'grades' }
+  | { level: 'teachers'; grade: string }
+  | { level: 'students'; grade: string; teacher?: string };
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [stats, setStats] = useState<Stats>({
-    tier1Pct: 65, tier2Pct: 25, tier3Pct: 10,
+    tier1Pct: 0, tier2Pct: 0, tier3Pct: 0,
     tier1Count: 0, tier2Count: 0, tier3Count: 0,
     totalStudents: 0,
+    activeCaseload: 0,
     gradeData: [],
     homeRoomData: [],
   });
   const [loadingStats, setLoadingStats] = useState(true);
 
+  // Target goal
+  const [targetGoal, setTargetGoal] = useState(85);
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [goalInput, setGoalInput] = useState('85');
+  const [savingGoal, setSavingGoal] = useState(false);
+
+  // Drill-down
+  const [drillView, setDrillView] = useState<DrillView>({ level: 'grades' });
+  const [gradeRows, setGradeRows] = useState<GradeRow[]>([]);
+  const [teacherRows, setTeacherRows] = useState<TeacherRow[]>([]);
+  const [drillStudents, setDrillStudents] = useState<DrillStudent[]>([]);
+  const [loadingDrill, setLoadingDrill] = useState(false);
+
   useEffect(() => {
     async function fetchAll() {
       setLoadingStats(true);
       try {
-        // Fetch first page to get total, then all records
         const first = await studentsApi.list({ page: 1, pageSize: 500 });
         const allStudents = first.items;
 
-        // If there are more pages, fetch them
         if (first.total > 500) {
           const pages = Math.ceil(first.total / 500);
           const rest = await Promise.all(
@@ -148,14 +171,84 @@ export default function Dashboard() {
         setLoadingStats(false);
       }
     }
+
+    async function fetchConfig() {
+      try {
+        const cfg = await dashboardApi.getTargetGoal();
+        setTargetGoal(cfg.goalPct);
+        setGoalInput(String(cfg.goalPct));
+      } catch {
+        // use default 85
+      }
+    }
+
+    async function fetchGrades() {
+      try {
+        const rows = await dashboardApi.byGrade();
+        setGradeRows(rows);
+      } catch (e) {
+        console.error('Grade drill-down fetch failed', e);
+      }
+    }
+
     fetchAll();
+    fetchConfig();
+    fetchGrades();
   }, []);
+
+  async function drillToTeachers(grade: string) {
+    setLoadingDrill(true);
+    setDrillView({ level: 'teachers', grade });
+    try {
+      const rows = await dashboardApi.teachersByGrade(grade);
+      setTeacherRows(rows);
+    } finally {
+      setLoadingDrill(false);
+    }
+  }
+
+  async function drillToStudents(grade: string, teacher?: string) {
+    setLoadingDrill(true);
+    setDrillView({ level: 'students', grade, teacher });
+    try {
+      const rows = await dashboardApi.studentsByGrade(grade);
+      const filtered = teacher ? rows.filter(s => (s.homeRoom ?? s.classGroup) === teacher) : rows;
+      setDrillStudents(filtered);
+    } finally {
+      setLoadingDrill(false);
+    }
+  }
+
+  function backToDrillLevel(level: 'grades' | 'teachers') {
+    if (level === 'grades') {
+      setDrillView({ level: 'grades' });
+    } else if (drillView.level === 'students') {
+      setDrillView({ level: 'teachers', grade: (drillView as any).grade });
+    }
+  }
+
+  async function saveGoal() {
+    const val = parseInt(goalInput, 10);
+    if (isNaN(val) || val < 1 || val > 100) return;
+    setSavingGoal(true);
+    try {
+      await dashboardApi.setTargetGoal(val);
+      setTargetGoal(val);
+      setEditingGoal(false);
+    } catch {
+      // keep editing open on error
+    } finally {
+      setSavingGoal(false);
+    }
+  }
 
   const donutData = [
     { name: 'Tier 1', value: stats.tier1Pct, count: stats.tier1Count, color: '#214965' },
     { name: 'Tier 2', value: stats.tier2Pct, count: stats.tier2Count, color: '#9ca3af' },
     { name: 'Tier 3', value: stats.tier3Pct, count: stats.tier3Count, color: '#b91c1c' },
   ];
+
+  const tierColor: Record<string, string> = { 'Tier 1': 'text-lgs-blue bg-blue-50', 'Tier 2': 'text-slate-600 bg-slate-100', 'Tier 3': 'text-red-700 bg-red-50' };
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
@@ -171,8 +264,38 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <KpiCard icon={<TrendingUp className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge="↗ IMPROVED" badgeColor="text-green-600 bg-green-50" label="Avg. ELA Growth" value="+19%" sub="vs last semester" tooltip="Average increase in ELA scores across the student body. Source: ILEARN Checkpoint & IXL." />
         <KpiCard icon={<Award className="w-6 h-6 text-lgs-red" />} iconBg="bg-red-50" badge="↗ IMPROVED" badgeColor="text-green-600 bg-green-50" label="Math Proficiency" value="64.2%" sub="+4.1% school-wide" tooltip="Percentage of students meeting grade-level expectations in Math." />
-        <KpiCard icon={<Users className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge="↘ ALERT" badgeColor="text-lgs-red bg-red-50" label="Active Caseload" value={loadingStats ? '...' : String(stats.totalStudents)} sub={loadingStats ? '' : `${stats.tier3Count} students in Tier 3`} tooltip="Total number of students currently tracked in the system." />
-        <KpiCard icon={<Target className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge="↗ IMPROVED" badgeColor="text-green-600 bg-green-50" label="Target Goal" value="85%" sub="Proficiency objective" tooltip="Institutional objective for overall student proficiency (District Strategic Plan)." />
+        <KpiCard icon={<Users className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge="↘ ALERT" badgeColor="text-lgs-red bg-red-50" label="Active Caseload" value={loadingStats ? '...' : String(stats.activeCaseload)} sub={loadingStats ? '' : `${stats.tier3Count} students in Tier 3`} tooltip="Total number of active students in the system. Tier distribution excludes students with Pending tier status." />
+        {/* Target Goal — editable */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
+          <div className="flex justify-between items-start mb-4">
+            <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center"><Target className="w-6 h-6 text-lgs-blue" /></div>
+            <span className="text-xs font-bold flex items-center gap-1 px-2 py-1 rounded-md text-green-600 bg-green-50">↗ IMPROVED</span>
+          </div>
+          <div className="flex items-center gap-1 mb-1">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Target Goal</h3>
+          </div>
+          {editingGoal ? (
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                type="number"
+                min={1} max={100}
+                value={goalInput}
+                onChange={e => setGoalInput(e.target.value)}
+                className="w-20 border border-slate-300 rounded-lg px-2 py-1 text-xl font-black text-lgs-blue focus:outline-none focus:ring-2 focus:ring-lgs-blue"
+                autoFocus
+              />
+              <span className="text-xl font-black text-lgs-blue">%</span>
+              <button onClick={saveGoal} disabled={savingGoal} className="p-1 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-50"><Check className="w-4 h-4" /></button>
+              <button onClick={() => { setEditingGoal(false); setGoalInput(String(targetGoal)); }} className="p-1 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200"><X className="w-4 h-4" /></button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <div className="text-3xl font-black text-lgs-blue">{targetGoal}%</div>
+              <button onClick={() => setEditingGoal(true)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-lgs-blue transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
+            </div>
+          )}
+          <p className="text-xs text-slate-500 font-medium mt-1">Proficiency objective</p>
+        </div>
       </div>
 
       {/* Charts Row 1 */}
@@ -258,6 +381,141 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Grade → Teacher → Student drill-down */}
+      <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+        <div className="mb-4 flex items-center gap-3">
+          {drillView.level !== 'grades' && (
+            <button onClick={() => backToDrillLevel(drillView.level === 'students' ? 'teachers' : 'grades')} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-lgs-blue transition-colors">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          )}
+          <div>
+            <h2 className="text-lg font-bold text-lgs-blue uppercase tracking-wide flex items-center gap-2">
+              <Users className="w-5 h-5 text-slate-400" />
+              {drillView.level === 'grades' && 'Grade Breakdown'}
+              {drillView.level === 'teachers' && `Grade ${(drillView as any).grade} — By Teacher`}
+              {drillView.level === 'students' && `Grade ${(drillView as any).grade} — Students`}
+            </h2>
+            {/* Breadcrumb */}
+            <p className="text-sm text-slate-500 flex items-center gap-1 mt-0.5">
+              <span
+                className={drillView.level !== 'grades' ? 'cursor-pointer hover:underline text-lgs-blue' : ''}
+                onClick={() => drillView.level !== 'grades' && setDrillView({ level: 'grades' })}
+              >All Grades</span>
+              {drillView.level !== 'grades' && (
+                <>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                  <span
+                    className={drillView.level === 'students' ? 'cursor-pointer hover:underline text-lgs-blue' : ''}
+                    onClick={() => drillView.level === 'students' && setDrillView({ level: 'teachers', grade: (drillView as any).grade })}
+                  >Grade {(drillView as any).grade}</span>
+                </>
+              )}
+              {drillView.level === 'students' && (drillView as any).teacher && (
+                <>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                  <span>{(drillView as any).teacher}</span>
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {loadingDrill ? (
+          <div className="text-slate-400 text-sm py-8 text-center">Loading…</div>
+        ) : drillView.level === 'grades' ? (
+          gradeRows.length === 0 ? (
+            <div className="text-slate-400 text-sm py-8 text-center">No tiered students yet.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                  <th className="pb-3 pr-4">Grade</th>
+                  <th className="pb-3 pr-4 text-lgs-blue">Tier 1</th>
+                  <th className="pb-3 pr-4 text-slate-500">Tier 2</th>
+                  <th className="pb-3 pr-4 text-lgs-red">Tier 3</th>
+                  <th className="pb-3 pr-4">Total</th>
+                  <th className="pb-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {gradeRows.map(row => (
+                  <tr key={row.grade} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToTeachers(row.grade)}>
+                    <td className="py-3 pr-4 font-semibold text-lgs-blue">Grade {row.grade}</td>
+                    <td className="py-3 pr-4">{row.tier1}</td>
+                    <td className="py-3 pr-4">{row.tier2}</td>
+                    <td className="py-3 pr-4">{row.tier3}</td>
+                    <td className="py-3 pr-4">{row.total}</td>
+                    <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : drillView.level === 'teachers' ? (
+          teacherRows.length === 0 ? (
+            <div className="text-slate-400 text-sm py-8 text-center">No teachers found for this grade.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                  <th className="pb-3 pr-4">Teacher / Class</th>
+                  <th className="pb-3 pr-4 text-lgs-blue">Tier 1</th>
+                  <th className="pb-3 pr-4 text-slate-500">Tier 2</th>
+                  <th className="pb-3 pr-4 text-lgs-red">Tier 3</th>
+                  <th className="pb-3 pr-4">Total</th>
+                  <th className="pb-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {teacherRows.map(row => (
+                  <tr key={row.teacher} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToStudents((drillView as any).grade, row.teacher)}>
+                    <td className="py-3 pr-4 font-semibold text-lgs-blue">{row.teacher}</td>
+                    <td className="py-3 pr-4">{row.tier1}</td>
+                    <td className="py-3 pr-4">{row.tier2}</td>
+                    <td className="py-3 pr-4">{row.tier3}</td>
+                    <td className="py-3 pr-4">{row.total}</td>
+                    <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
+                  </tr>
+                ))}
+                <tr className="hover:bg-slate-100 transition-colors cursor-pointer text-slate-400" onClick={() => drillToStudents((drillView as any).grade)}>
+                  <td className="py-3 pr-4 italic">View all students in grade</td>
+                  <td colSpan={4} />
+                  <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
+                </tr>
+              </tbody>
+            </table>
+          )
+        ) : (
+          drillStudents.length === 0 ? (
+            <div className="text-slate-400 text-sm py-8 text-center">No students found.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                  <th className="pb-3 pr-4">Name</th>
+                  <th className="pb-3 pr-4">Class Group</th>
+                  <th className="pb-3 pr-4">Tier</th>
+                  <th className="pb-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {drillStudents.map(s => (
+                  <tr key={s.studentId} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => navigate(`/students/${s.studentId}`)}>
+                    <td className="py-3 pr-4 font-semibold text-lgs-blue">{s.fullName}</td>
+                    <td className="py-3 pr-4 text-slate-500">{s.classGroup || '—'}</td>
+                    <td className="py-3 pr-4">
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${tierColor[s.tier] ?? 'text-slate-400 bg-slate-100'}`}>{s.tier}</span>
+                    </td>
+                    <td className="py-3 text-slate-500 text-xs">{s.tierStatus}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        )}
+      </div>
+
       {/* Home room + map */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {stats.homeRoomData.length > 0 && (
@@ -302,6 +560,7 @@ export default function Dashboard() {
               />
             </MapContainer>
           </div>
+          <p className="text-xs text-slate-400 mt-2 italic">Geographic data not available for this deployment.</p>
         </div>
       </div>
     </div>
