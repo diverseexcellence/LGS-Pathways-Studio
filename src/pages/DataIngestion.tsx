@@ -331,14 +331,16 @@ export default function DataIngestion() {
         {importResults && importResults.length > 0 && (
           <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 text-sm space-y-2">
             <p className="font-semibold text-slate-700">Landing Zone Import Results</p>
-            {importResults.map((r, i) => (
-              <div key={i} className={`rounded px-3 py-2 text-xs ${r.error ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-800'}`}>
-                <span className="font-medium">{r.file}</span>
-                {r.error
-                  ? ` — Error: ${r.error}`
-                  : ` (${r.uploadType}) — ${r.result?.importedRows ?? 0} imported, ${r.result?.skippedRows ?? 0} skipped`}
-              </div>
-            ))}
+            <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+              {importResults.map((r, i) => (
+                <div key={i} className={`rounded px-3 py-2 text-xs ${r.error ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-800'}`}>
+                  <span className="font-medium break-all">{r.file}</span>
+                  {r.error
+                    ? ` — Error: ${r.error}`
+                    : ` (${r.uploadType}) — ${r.result?.importedRows ?? 0} imported, ${r.result?.skippedRows ?? 0} skipped`}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
