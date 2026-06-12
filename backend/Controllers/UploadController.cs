@@ -157,6 +157,15 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             }
         }
 
+        // Refresh school averages and recompute tiers for all non-Finalized students
+        _ = Task.Run(() => schoolAverages.RefreshAsync());
+        _ = Task.Run(async () =>
+        {
+            var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
+            foreach (var student in students.Where(s => s.TierStatus != TierStatus.Finalized))
+                await tierCalculation.ComputeAndApplyAsync(student);
+        });
+
         return Ok(new { message = $"Processed {files.Count} file(s) from landing-zone.", results });
     }
 
@@ -194,6 +203,16 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         public void CopyTo(Stream target) => _stream.CopyTo(target);
         public Task CopyToAsync(Stream target, CancellationToken ct = default) => _stream.CopyToAsync(target, ct);
         public Stream OpenReadStream() => _stream;
+    }
+
+    [HttpPost("recalculate-tiers")]
+    public async Task<IActionResult> RecalculateTiers()
+    {
+        var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
+        var eligible = students.Where(s => s.TierStatus != TierStatus.Finalized).ToList();
+        foreach (var student in eligible)
+            await tierCalculation.ComputeAndApplyAsync(student);
+        return Ok(new { message = $"Tier recalculation complete.", processed = eligible.Count });
     }
 
     [HttpGet("logs")]

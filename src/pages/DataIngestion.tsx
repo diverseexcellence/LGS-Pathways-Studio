@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X, ShieldAlert, Download } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X, ShieldAlert, Download, RefreshCw } from 'lucide-react';
 import { uploadApi, exportApi, ParseSummary, UploadLog } from '../lib/api';
 
 const UPLOAD_TYPES = [
@@ -26,6 +26,8 @@ export default function DataIngestion() {
   const [historySearch, setHistorySearch] = useState('');
   const [historyTypeFilter, setHistoryTypeFilter] = useState('');
   const [isExportingStns, setIsExportingStns] = useState(false);
+  const [isRecalculating, setIsRecalculating] = useState(false);
+  const [recalcStatus, setRecalcStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [stnExportStatus, setStnExportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -141,6 +143,19 @@ export default function DataIngestion() {
     }
   };
 
+
+  const handleRecalculateTiers = async () => {
+    setIsRecalculating(true);
+    setRecalcStatus(null);
+    try {
+      const res = await uploadApi.recalculateTiers();
+      setRecalcStatus({ type: 'success', message: res.message });
+    } catch (err: any) {
+      setRecalcStatus({ type: 'error', message: err.message || 'Recalculation failed.' });
+    } finally {
+      setIsRecalculating(false);
+    }
+  };
 
   const handleExportUnmatchedStns = async () => {
     setIsExportingStns(true);
@@ -296,6 +311,22 @@ export default function DataIngestion() {
           {isImporting ? 'Importing from Landing Zone…' : 'Import from Landing Zone'}
         </button>
 
+        <button
+          onClick={handleRecalculateTiers}
+          disabled={isRecalculating}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-700 text-white rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw className={`w-5 h-5 ${isRecalculating ? 'animate-spin' : ''}`} />
+          {isRecalculating ? 'Recalculating Tiers…' : 'Recalculate All Tiers'}
+        </button>
+
+
+        {recalcStatus && (
+          <div className={`p-3 rounded-lg text-sm border flex items-center gap-2 ${recalcStatus.type === 'success' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
+            {recalcStatus.type === 'success' ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+            {recalcStatus.message}
+          </div>
+        )}
 
         {importResults && importResults.length > 0 && (
           <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 text-sm space-y-2">
