@@ -90,3 +90,7 @@ backend/deploy.zip
 # Docs (exclude root-level md files; allow docs/ folder)
 /*.md
 DEV_SETUP.md
+
+# Reference documents — local only, never committed
+C:/tmp/
+c:/tmp/
