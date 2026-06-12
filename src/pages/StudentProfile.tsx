@@ -436,6 +436,8 @@ export default function StudentProfile() {
                     {(() => {
                       const firstName = student?.fullName?.trim().split(/\s+/)[0] ?? 'The student';
                       return aiSummary.summaryText
+                        // Strip the redundant top-level heading the LLM emits from the prompt template
+                        .replace(/^##\s+AI Assistant Summary\s*\n?/im, '')
                         .replace(/\bStudent\s+S-[A-Za-z0-9-]+/gi, firstName)
                         .replace(/\bS-[A-Za-z0-9-]+\b/gi, firstName);
                     })()}

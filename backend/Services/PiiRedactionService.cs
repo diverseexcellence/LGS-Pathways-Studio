@@ -90,7 +90,6 @@ public class PiiRedactionService : IPiiRedactionService
 
             Output your response in the following Markdown format exactly:
 
-            ## AI Assistant Summary
             **Student Academic Progress Summary{gradeLabel}**
 
             [One sentence overview of the student's overall performance pattern across subjects.]
@@ -111,7 +110,14 @@ public class PiiRedactionService : IPiiRedactionService
 
             [One paragraph summarising the Math trend and what the latest result means.]
 
-            [One concluding sentence comparing ELA and Math overall.]
+            ### Reading Performance
+            [One sentence describing the overall Reading trend (Acadience / I-Read data).]
+
+            [Bullet list: one bullet per Reading assessment record in format: **[assessment name]** was marked [proficiency] with a score of [score].]
+
+            [One paragraph summarising the Reading trend and what it means for early literacy.]
+
+            [One concluding sentence comparing performance across subjects.]
 
             ### Suggestions
             - [Suggestion 1 — specific to lowest-performing subject]
@@ -120,7 +126,7 @@ public class PiiRedactionService : IPiiRedactionService
             - Use the system-suggested tier as a starting point, with the final tier reviewed and finalized by the Administrator.
 
             Rules:
-            - Group all ELA assessments under ELA Performance; all Math assessments under Math Performance; any other subjects get their own section using the same structure.
+            - Group assessments by subject exactly as labelled in the records: ELA → ELA Performance, Math → Math Performance, Reading → Reading Performance (Acadience/I-Read). Do NOT merge Reading into ELA.
             - If a subject has no assessments, omit that section entirely.
             - Do not invent data. Only reference assessments provided below.
             - Use plain language suitable for an educator audience.

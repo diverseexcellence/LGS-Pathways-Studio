@@ -36,8 +36,16 @@ public class AiController(
         if (assessments.Count == 0)
             return BadRequest(new { message = "No assessments found. Upload assessment data first." });
 
-        var top20 = assessments.Take(20).Select(a => (
-            subject: a.Subject ?? "Mixed",
+        // Deduplicate: one record per (UploadType, Subject, Period) — most recent wins
+        var dedupedAssessments = assessments
+            .OrderByDescending(a => a.Date ?? a.UploadedAt)
+            .GroupBy(a => $"{a.UploadType}|{ResolveSubject(a.Subject, a.UploadType)}|{a.Period ?? a.Date ?? ""}")
+            .Select(g => g.First())
+            .Take(20)
+            .ToList();
+
+        var top20 = dedupedAssessments.Select(a => (
+            subject: ResolveSubject(a.Subject, a.UploadType),
             type: a.UploadType,
             score: a.Score ?? 0.0,
             proficiency: a.Proficiency,
@@ -93,6 +101,27 @@ public class AiController(
             ip: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(summary);
+    }
+
+    /// <summary>
+    /// Resolves the display subject for the AI prompt. Handles "Mixed" IXL records and
+    /// ensures Acadience/IREAD are always shown as "Reading" regardless of stored Subject value.
+    /// </summary>
+    private static string ResolveSubject(string? subject, string uploadType)
+    {
+        // Acadience and IREAD are always Reading — override whatever Subject was stored
+        if (uploadType.Equals("Acadience", StringComparison.OrdinalIgnoreCase) ||
+            uploadType.Equals("IREAD", StringComparison.OrdinalIgnoreCase))
+            return "Reading";
+
+        if (subject is null || subject.Equals("Mixed", StringComparison.OrdinalIgnoreCase))
+        {
+            // IXL stores subject in Subject column — if missing, default to ELA (IXL covers ELA+Math)
+            if (uploadType.Equals("IXL", StringComparison.OrdinalIgnoreCase)) return "ELA";
+            return "Mixed";
+        }
+
+        return subject;
     }
 
     /// <summary>Admin endpoint to upsert the AI summary prompt template without a code release (Task 32).</summary>
