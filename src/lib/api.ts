@@ -199,6 +199,12 @@ export const uploadApi = {
       '/api/upload/import-landing-zone',
       { method: 'POST' }
     ),
+
+  recalculateTiers: () =>
+    request<{ message: string; processed: number }>(
+      '/api/upload/recalculate-tiers',
+      { method: 'POST' }
+    ),
 };
 
 // ─── Export ───────────────────────────────────────────────────────────────────

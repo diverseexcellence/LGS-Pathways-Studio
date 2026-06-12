@@ -105,7 +105,7 @@ public class TierCalculationService(
                 ? DescribeAssessment(latestEla, "ELA")
                 : DescribeAssessment(latestMath ?? latestReading, mathOnAbove.HasValue ? "Math" : "Reading");
 
-            var tier = onAbove ? "1" : "3";
+            var tier = onAbove ? "Tier 1" : "Tier 3";
             var reasoning = $"Single-subject evaluation ({subjectLabel} → {(onAbove ? "On/Above" : "Below")}). " +
                             "Second subject data unavailable; same signal used for both.";
             return new TierResult(TierStatus.SystemRecommended, tier, reasoning);
@@ -120,19 +120,19 @@ public class TierCalculationService(
 
         if (elaTier && mathTier)
         {
-            resultTier    = "1";
+            resultTier    = "Tier 1";
             tierReasoning = $"Based on {DescribeAssessment(latestEla, "ELA")} → On/Above and " +
                             $"{DescribeAssessment(latestMath, "Math")} → On/Above.";
         }
         else if (!elaTier && !mathTier)
         {
-            resultTier    = "3";
+            resultTier    = "Tier 3";
             tierReasoning = $"Based on {DescribeAssessment(latestEla, "ELA")} → Below and " +
                             $"{DescribeAssessment(latestMath, "Math")} → Below.";
         }
         else
         {
-            resultTier    = "2";
+            resultTier    = "Tier 2";
             var elaLabel  = $"{DescribeAssessment(latestEla, "ELA")} → {(elaTier ? "On/Above" : "Below")}";
             var mathLabel = $"{DescribeAssessment(latestMath, "Math")} → {(mathTier ? "On/Above" : "Below")}";
             tierReasoning = $"Based on {elaLabel} and {mathLabel}.";
