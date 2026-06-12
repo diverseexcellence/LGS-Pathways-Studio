@@ -93,7 +93,6 @@ export default function Layout() {
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Students', path: '/students', icon: Users },
     { name: 'Data Upload', path: '/upload', icon: Upload },
-    { name: 'Export', path: '/export', icon: FileDown },
   ];
 
   return (
