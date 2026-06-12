@@ -266,6 +266,24 @@ public class PromptConfigDocument
     public string? UpdatedBy { get; set; }
 }
 
+public class TargetGoalDocument
+{
+    [JsonProperty("id")]
+    public string Id { get; set; } = "target-goal";
+
+    [JsonProperty("partitionKey")]
+    public string PartitionKey { get; set; } = "config";
+
+    [JsonProperty("goalPct")]
+    public int GoalPct { get; set; } = 85;
+
+    [JsonProperty("updatedAt")]
+    public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
+
+    [JsonProperty("updatedBy")]
+    public string? UpdatedBy { get; set; }
+}
+
 public class AdminDocument
 {
     [JsonProperty("id")]
