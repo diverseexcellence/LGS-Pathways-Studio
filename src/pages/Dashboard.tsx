@@ -165,13 +165,6 @@ export default function Dashboard() {
           <h1 className="text-3xl font-bold text-lgs-blue">Performance Trends</h1>
           <p className="text-slate-500 mt-1">Institutional academic growth and intervention analytics for the 2024-2025 school year.</p>
         </div>
-        <button
-          onClick={() => navigate('/data')}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark transition-colors"
-        >
-          <Download className="w-4 h-4" />
-          Export Report
-        </button>
       </div>
 
       {/* KPI Cards */}
