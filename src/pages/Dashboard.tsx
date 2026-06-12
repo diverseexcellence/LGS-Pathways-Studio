@@ -263,12 +263,39 @@ export default function Dashboard() {
     setExportingPdf(true);
     try {
       const html2pdf = (await import('html2pdf.js')).default;
+      // html2canvas can't parse oklch() (used by Tailwind v4 CSS vars).
+      // Inline computed rgb() values on every element in the cloned doc before capture.
       await html2pdf()
         .set({
           margin: [10, 10, 10, 10],
           filename: `lgs-dashboard-${new Date().toISOString().slice(0, 10)}.pdf`,
           image: { type: 'jpeg', quality: 0.95 },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            onclone: (_doc: Document, el: HTMLElement) => {
+              const colorProps = [
+                'color', 'backgroundColor', 'borderColor', 'borderTopColor',
+                'borderRightColor', 'borderBottomColor', 'borderLeftColor',
+                'outlineColor', 'fill', 'stroke',
+              ] as const;
+              const tmp = document.createElement('div');
+              tmp.style.display = 'none';
+              document.body.appendChild(tmp);
+              el.querySelectorAll<HTMLElement>('*').forEach((node) => {
+                const computed = window.getComputedStyle(node);
+                colorProps.forEach((prop) => {
+                  const val = computed[prop as keyof CSSStyleDeclaration] as string;
+                  if (val && val.includes('oklch')) {
+                    tmp.style.color = val;
+                    node.style[prop as keyof CSSStyleDeclaration] = window.getComputedStyle(tmp).color as never;
+                  }
+                });
+              });
+              document.body.removeChild(tmp);
+            },
+          },
           jsPDF: { unit: 'mm', format: 'a3', orientation: 'landscape' },
         })
         .from(dashboardRef.current)
