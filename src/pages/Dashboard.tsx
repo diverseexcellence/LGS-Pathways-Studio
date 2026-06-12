@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TrendingUp, Award, Users, Target, Info, ChevronRight, ChevronLeft, Pencil, Check, X } from 'lucide-react';
-import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent } from '../lib/api';
+import { TrendingUp, Award, Users, Target, Info, ChevronRight, ChevronLeft, Pencil, Check, X, Download } from 'lucide-react';
+import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis } from '../lib/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
@@ -12,16 +12,6 @@ import 'leaflet/dist/leaflet.css';
 
 const defaultCenter: [number, number] = [39.7684, -86.1581];
 
-// Hardcoded timeline until Task 20 real data endpoint is available
-const timelineData = [
-  { month: 'Sep', ela: 42, math: 38 },
-  { month: 'Oct', ela: 45, math: 42 },
-  { month: 'Nov', ela: 48, math: 44 },
-  { month: 'Dec', ela: 46, math: 41 },
-  { month: 'Jan', ela: 52, math: 50 },
-  { month: 'Feb', ela: 58, math: 54 },
-  { month: 'Mar', ela: 61, math: 59 },
-];
 
 interface Stats {
   tier1Pct: number;
@@ -110,7 +100,7 @@ function buildStats(students: Student[]): Stats {
     tier3Count: t3,
     totalStudents: t1 + t2 + t3,
     activeCaseload,
-    gradeData: gradeData.length ? gradeData : [],
+    gradeData,
     homeRoomData,
   };
 }
@@ -124,6 +114,8 @@ type DrillView =
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const dashboardRef = useRef<HTMLDivElement>(null);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [stats, setStats] = useState<Stats>({
     tier1Pct: 0, tier2Pct: 0, tier3Pct: 0,
     tier1Count: 0, tier2Count: 0, tier3Count: 0,
@@ -133,6 +125,10 @@ export default function Dashboard() {
     homeRoomData: [],
   });
   const [loadingStats, setLoadingStats] = useState(true);
+
+  // KPIs (real data)
+  const [kpis, setKpis] = useState<DashboardKpis | null>(null);
+  const [timelineData, setTimelineData] = useState<TimelinePoint[]>([]);
 
   // Target goal
   const [targetGoal, setTargetGoal] = useState(85);
@@ -191,9 +187,29 @@ export default function Dashboard() {
       }
     }
 
+    async function fetchKpis() {
+      try {
+        const data = await dashboardApi.kpis();
+        setKpis(data);
+      } catch (e) {
+        console.error('KPI fetch failed', e);
+      }
+    }
+
+    async function fetchTimeline() {
+      try {
+        const data = await dashboardApi.timeline();
+        setTimelineData(data);
+      } catch (e) {
+        console.error('Timeline fetch failed', e);
+      }
+    }
+
     fetchAll();
     fetchConfig();
     fetchGrades();
+    fetchKpis();
+    fetchTimeline();
   }, []);
 
   async function drillToTeachers(grade: string) {
@@ -242,6 +258,26 @@ export default function Dashboard() {
     }
   }
 
+  async function exportPdf() {
+    if (!dashboardRef.current) return;
+    setExportingPdf(true);
+    try {
+      const html2pdf = (await import('html2pdf.js')).default;
+      await html2pdf()
+        .set({
+          margin: [10, 10, 10, 10],
+          filename: `lgs-dashboard-${new Date().toISOString().slice(0, 10)}.pdf`,
+          image: { type: 'jpeg', quality: 0.95 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF: { unit: 'mm', format: 'a3', orientation: 'landscape' },
+        })
+        .from(dashboardRef.current)
+        .save();
+    } finally {
+      setExportingPdf(false);
+    }
+  }
+
   const donutData = [
     { name: 'Tier 1', value: stats.tier1Pct, count: stats.tier1Count, color: '#214965' },
     { name: 'Tier 2', value: stats.tier2Pct, count: stats.tier2Count, color: '#9ca3af' },
@@ -251,19 +287,45 @@ export default function Dashboard() {
   const tierColor: Record<string, string> = { 'Tier 1': 'text-lgs-blue bg-blue-50', 'Tier 2': 'text-slate-600 bg-slate-100', 'Tier 3': 'text-red-700 bg-red-50' };
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto pb-12">
+    <div ref={dashboardRef} className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-lgs-blue">Performance Trends</h1>
           <p className="text-slate-500 mt-1">Institutional academic growth and intervention analytics for the 2024-2025 school year.</p>
         </div>
+        <button
+          onClick={exportPdf}
+          disabled={exportingPdf}
+          className="flex items-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-semibold rounded-xl hover:bg-blue-900 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          <Download className="w-4 h-4" />
+          {exportingPdf ? 'Generating PDF…' : 'Export PDF'}
+        </button>
       </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <KpiCard icon={<TrendingUp className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge="↗ IMPROVED" badgeColor="text-green-600 bg-green-50" label="Avg. ELA Growth" value="+19%" sub="vs last semester" tooltip="Average increase in ELA scores across the student body. Source: ILEARN Checkpoint & IXL." />
-        <KpiCard icon={<Award className="w-6 h-6 text-lgs-red" />} iconBg="bg-red-50" badge="↗ IMPROVED" badgeColor="text-green-600 bg-green-50" label="Math Proficiency" value="64.2%" sub="+4.1% school-wide" tooltip="Percentage of students meeting grade-level expectations in Math." />
+        <KpiCard
+          icon={<TrendingUp className="w-6 h-6 text-lgs-blue" />}
+          iconBg="bg-slate-100"
+          badge={kpis?.elaGrowthAvgDelta != null ? (kpis.elaGrowthAvgDelta >= 0 ? '↗ IMPROVED' : '↘ DECLINED') : '— NO DATA'}
+          badgeColor={kpis?.elaGrowthAvgDelta != null ? (kpis.elaGrowthAvgDelta >= 0 ? 'text-green-600 bg-green-50' : 'text-lgs-red bg-red-50') : 'text-slate-400 bg-slate-100'}
+          label="Avg. ELA Growth"
+          value={kpis == null ? '...' : kpis.elaGrowthAvgDelta != null ? (kpis.elaGrowthAvgDelta >= 0 ? `+${kpis.elaGrowthAvgDelta}` : String(kpis.elaGrowthAvgDelta)) : 'N/A'}
+          sub={kpis == null ? '' : kpis.elaStudentsWithGrowthData > 0 ? `${kpis.elaStudentsWithGrowthData} students with 2+ assessments` : 'Insufficient data for growth calc'}
+          tooltip="Average score delta (latest minus earliest ELA assessment) across students with 2+ ELA records. Source: ILEARN & IXL."
+        />
+        <KpiCard
+          icon={<Award className="w-6 h-6 text-lgs-red" />}
+          iconBg="bg-red-50"
+          badge={kpis?.mathProficiencyPct != null ? (kpis.mathProficiencyPct >= 50 ? '↗ IMPROVED' : '↘ ALERT') : '— NO DATA'}
+          badgeColor={kpis?.mathProficiencyPct != null ? (kpis.mathProficiencyPct >= 50 ? 'text-green-600 bg-green-50' : 'text-lgs-red bg-red-50') : 'text-slate-400 bg-slate-100'}
+          label="Math Proficiency"
+          value={kpis == null ? '...' : kpis.mathProficiencyPct != null ? `${kpis.mathProficiencyPct}%` : 'N/A'}
+          sub={kpis == null ? '' : kpis.mathStudentsTotal > 0 ? `${kpis.mathStudentsOnAbove} of ${kpis.mathStudentsTotal} students On/Above` : 'No Math assessment data'}
+          tooltip="Percentage of students with latest Math assessment at or above grade level (On/Above). Source: ILEARN & IXL."
+        />
         <KpiCard icon={<Users className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge="↘ ALERT" badgeColor="text-lgs-red bg-red-50" label="Active Caseload" value={loadingStats ? '...' : String(stats.activeCaseload)} sub={loadingStats ? '' : `${stats.tier3Count} students in Tier 3`} tooltip="Total number of active students in the system. Tier distribution excludes students with Pending tier status." />
         {/* Target Goal — editable */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">

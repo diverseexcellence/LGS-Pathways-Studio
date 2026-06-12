@@ -260,6 +260,14 @@ export const auditApi = {
 export interface GradeRow { grade: string; tier1: number; tier2: number; tier3: number; total: number }
 export interface TeacherRow { teacher: string; tier1: number; tier2: number; tier3: number; total: number }
 export interface DrillStudent { studentId: string; fullName: string; tier: string; tierStatus: string; classGroup: string; homeRoom: string | null }
+export interface TimelinePoint { month: string; year: number; monthKey: string; ela: number | null; math: number | null }
+export interface DashboardKpis {
+  mathProficiencyPct: number | null;
+  mathStudentsTotal: number;
+  mathStudentsOnAbove: number;
+  elaGrowthAvgDelta: number | null;
+  elaStudentsWithGrowthData: number;
+}
 
 export const dashboardApi = {
   getTargetGoal: () => request<{ goalPct: number; updatedAt: string; updatedBy: string | null }>('/api/dashboard/target-goal'),
@@ -267,4 +275,6 @@ export const dashboardApi = {
   byGrade: () => request<GradeRow[]>('/api/dashboard/by-grade'),
   teachersByGrade: (grade: string) => request<TeacherRow[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/teachers`),
   studentsByGrade: (grade: string) => request<DrillStudent[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/students`),
+  kpis: () => request<DashboardKpis>('/api/dashboard/kpis'),
+  timeline: () => request<TimelinePoint[]>('/api/dashboard/timeline'),
 };

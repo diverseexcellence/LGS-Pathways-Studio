@@ -36,6 +36,102 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         return Ok(new { goalPct = existing.GoalPct });
     }
 
+    // ─── KPIs (ELA growth + Math proficiency) ────────────────────────────────
+
+    [HttpGet("kpis")]
+    public async Task<IActionResult> Kpis()
+    {
+        var allAssessments = await cosmos.GetAllAssessmentsAsync();
+
+        // ── Math proficiency % ────────────────────────────────────────────────
+        // Group by studentId, pick latest Math assessment per student, resolve On/Above
+        var mathByStudent = allAssessments
+            .Where(a => NormalizeSubject(a.Subject) == "Math" && a.StudentId != null)
+            .GroupBy(a => a.StudentId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.Date ?? a.UploadedAt).First());
+
+        int mathTotal = mathByStudent.Count;
+        int mathOnAbove = mathByStudent.Values.Count(a => ResolveOnAbove(a) == true);
+        double? mathPct = mathTotal > 0 ? Math.Round((double)mathOnAbove / mathTotal * 100, 1) : null;
+
+        // ── ELA growth % ─────────────────────────────────────────────────────
+        // Per student: earliest vs latest ELA score. Average the deltas across students who have ≥2 records.
+        var elaByStudent = allAssessments
+            .Where(a => NormalizeSubject(a.Subject) == "ELA" && a.StudentId != null && a.Score.HasValue)
+            .GroupBy(a => a.StudentId)
+            .Where(g => g.Count() >= 2)
+            .ToList();
+
+        double? elaGrowth = null;
+        if (elaByStudent.Count > 0)
+        {
+            var deltas = elaByStudent.Select(g =>
+            {
+                var ordered = g.OrderBy(a => a.Date ?? a.UploadedAt).ToList();
+                return ordered.Last().Score!.Value - ordered.First().Score!.Value;
+            }).ToList();
+            elaGrowth = Math.Round(deltas.Average(), 1);
+        }
+
+        return Ok(new
+        {
+            mathProficiencyPct = mathPct,
+            mathStudentsTotal = mathTotal,
+            mathStudentsOnAbove = mathOnAbove,
+            elaGrowthAvgDelta = elaGrowth,
+            elaStudentsWithGrowthData = elaByStudent.Count,
+        });
+    }
+
+    // ─── Academic growth timeline ─────────────────────────────────────────────
+
+    [HttpGet("timeline")]
+    public async Task<IActionResult> Timeline()
+    {
+        var allAssessments = await cosmos.GetAllAssessmentsAsync();
+
+        // Group by calendar month (yyyy-MM), average score per subject per month
+        var monthMap = new Dictionary<string, (List<double> ela, List<double> math)>();
+
+        foreach (var a in allAssessments)
+        {
+            if (!a.Score.HasValue) continue;
+            var subject = NormalizeSubject(a.Subject);
+            if (subject != "ELA" && subject != "Math") continue;
+
+            var dateStr = a.Date ?? a.UploadedAt;
+            if (!DateTime.TryParse(dateStr, out var dt)) continue;
+            var key = dt.ToString("yyyy-MM");
+
+            if (!monthMap.TryGetValue(key, out var bucket))
+            {
+                bucket = (new List<double>(), new List<double>());
+                monthMap[key] = bucket;
+            }
+
+            if (subject == "ELA") bucket.ela.Add(a.Score.Value);
+            else bucket.math.Add(a.Score.Value);
+        }
+
+        var result = monthMap
+            .OrderBy(kv => kv.Key)
+            .Select(kv =>
+            {
+                var dt = DateTime.ParseExact(kv.Key, "yyyy-MM", null);
+                return new
+                {
+                    month = dt.ToString("MMM"),
+                    year = dt.Year,
+                    monthKey = kv.Key,
+                    ela = kv.Value.ela.Count > 0 ? (double?)Math.Round(kv.Value.ela.Average(), 1) : null,
+                    math = kv.Value.math.Count > 0 ? (double?)Math.Round(kv.Value.math.Average(), 1) : null,
+                };
+            })
+            .ToList();
+
+        return Ok(result);
+    }
+
     // ─── Grade drill-down ─────────────────────────────────────────────────────
 
     [HttpGet("by-grade")]
@@ -136,6 +232,40 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private static string NormalizeSubject(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "Unknown";
+        var s = raw.Trim();
+        if (s.Equals("Reading", StringComparison.OrdinalIgnoreCase)) return "Reading";
+        if (s.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
+            s.Contains("English", StringComparison.OrdinalIgnoreCase) ||
+            s.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
+        if (s.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
+        return s;
+    }
+
+    private static bool? ResolveOnAbove(AssessmentDocument a)
+    {
+        var p = (a.Proficiency ?? "").ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(p))
+        {
+            if (p.Contains("far below") || p.Contains("below") || p.Contains("approaching") ||
+                p.Contains("tier 2") || p.Contains("tier 3")) return false;
+            if (p.Contains("above") || p.Contains("on grade") || p.Contains("at grade") ||
+                p.Contains("at proficiency") || p.Contains("proficient") || p.Contains("meets") ||
+                p.Contains("exceeds") || p.Contains("mid above") || p.Contains("early on") ||
+                p.Contains("tier 1")) return true;
+        }
+        // Fallback: scan RawFields for percentile
+        foreach (var kv in a.RawFields)
+        {
+            if (kv.Key.Contains("percentile", StringComparison.OrdinalIgnoreCase) &&
+                double.TryParse(kv.Value, out var pct))
+                return pct >= 40;
+        }
+        return null;
+    }
 
     private static string NormalizeGrade(string? raw)
     {
