@@ -17,6 +17,74 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
 
+    /// <summary>
+    /// BRD DI-10: diff assessment STNs against demographic STNs and return a CSV of unmatched rows.
+    /// Rows = assessment records whose STN has no corresponding active student in the students container.
+    /// </summary>
+    [HttpGet("unmatched-stns")]
+    public async Task<IActionResult> UnmatchedStns(CancellationToken ct)
+    {
+        // Load all active student STNs into a set for O(1) lookup
+        var (students, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
+        var knownStns = students
+            .Where(s => !string.IsNullOrWhiteSpace(s.Stn))
+            .Select(s => s.Stn!.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Load all assessment records
+        var allAssessments = await cosmos.GetAllAssessmentsAsync();
+
+        // Find assessments whose studentId maps to a student with no STN, or where the raw STN
+        // stored in RawFields doesn't match any known student STN
+        var studentById = students.ToDictionary(s => s.StudentId, StringComparer.OrdinalIgnoreCase);
+
+        var unmatched = new List<(string Stn, string StudentId, string UploadType, string FileName, string UploadedAt)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var a in allAssessments)
+        {
+            // Extract the raw STN stored in the assessment's RawFields
+            var rawStn = a.RawFields
+                .Where(kv => kv.Key.Contains("STN", StringComparison.OrdinalIgnoreCase) ||
+                             kv.Key.Contains("State", StringComparison.OrdinalIgnoreCase) ||
+                             kv.Key.Contains("SSID", StringComparison.OrdinalIgnoreCase))
+                .Select(kv => kv.Value?.Trim())
+                .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+            if (string.IsNullOrWhiteSpace(rawStn)) continue;
+            if (knownStns.Contains(rawStn)) continue;
+
+            // Dedupe per STN + upload file combination
+            var key = $"{rawStn}|{a.FileName}";
+            if (!seen.Add(key)) continue;
+
+            unmatched.Add((rawStn, a.StudentId, a.UploadType, a.FileName, a.UploadedAt));
+        }
+
+        // Build CSV
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("STN,StudentId,UploadType,FileName,UploadedAt");
+        foreach (var (stn, studentId, uploadType, fileName, uploadedAt) in unmatched.OrderBy(r => r.Stn))
+            sb.AppendLine($"{CsvEscape(stn)},{CsvEscape(studentId)},{CsvEscape(uploadType)},{CsvEscape(fileName)},{CsvEscape(uploadedAt)}");
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Export, entityType: "DataQuality",
+            details: $"Unmatched STN report: {unmatched.Count} unmatched assessment rows across {unmatched.Select(r => r.FileName).Distinct().Count()} file(s)",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        var csvBytes = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        var reportName = $"unmatched-stns-{DateTime.UtcNow:yyyyMMdd-HHmm}.csv";
+        return File(csvBytes, "text/csv", reportName);
+    }
+
+    private static string CsvEscape(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "";
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        return value;
+    }
+
     [HttpGet]
     public async Task<IActionResult> Export(CancellationToken ct)
     {
