@@ -141,6 +141,7 @@ export default function DataIngestion() {
     }
   };
 
+
   const handleExportUnmatchedStns = async () => {
     setIsExportingStns(true);
     setStnExportStatus(null);
@@ -200,9 +201,6 @@ export default function DataIngestion() {
 
       <div>
         <h1 className="text-2xl font-bold text-lgs-blue">Data Upload</h1>
-        <p className="text-slate-500 mt-1 text-sm">
-          Upload CSV or Excel student data files. Files are parsed server-side and stored securely in Azure Cosmos DB.
-        </p>
       </div>
 
       {/* Upload Card */}
@@ -283,20 +281,6 @@ export default function DataIngestion() {
           {isUploading ? 'Uploading & Parsing…' : 'Upload Data'}
         </button>
 
-        <div className="border-t border-slate-200 pt-4">
-          <p className="text-xs text-slate-500 mb-3">
-            Or import all files already staged in the Azure <strong>landing-zone</strong> container.
-            Upload type is detected automatically from each filename.
-          </p>
-          <button
-            onClick={handleImportLandingZone}
-            disabled={isImporting}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
-          >
-            <CloudDownload className="w-5 h-5" />
-            {isImporting ? 'Importing from Landing Zone…' : 'Import from Landing Zone'}
-          </button>
-        </div>
 
         {importResults && importResults.length > 0 && (
           <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 text-sm space-y-2">
@@ -350,6 +334,38 @@ export default function DataIngestion() {
                 {parseSummary.errors.slice(0, 5).map((e, i) => <p key={i}>{e}</p>)}
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Data Quality */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2 mb-1">
+          <ShieldAlert className="w-5 h-5 text-lgs-red" />
+          Data Quality
+        </h2>
+        <p className="text-sm text-slate-500 mb-4">
+          Download a report of assessment records whose STN does not match any enrolled student.
+          Use this to identify file mismatches or missing demographic uploads.
+        </p>
+        <button
+          onClick={handleExportUnmatchedStns}
+          disabled={isExportingStns}
+          className="flex items-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors text-sm"
+        >
+          <Download className="w-4 h-4" />
+          {isExportingStns ? 'Generating report…' : 'Download Unmatched STN Report'}
+        </button>
+        {stnExportStatus && (
+          <div className={`mt-3 p-3 rounded-lg flex items-center gap-2 text-sm ${
+            stnExportStatus.type === 'success'
+              ? 'bg-green-50 text-green-800 border border-green-200'
+              : 'bg-red-50 text-red-800 border border-red-200'
+          }`}>
+            {stnExportStatus.type === 'success'
+              ? <CheckCircle className="w-4 h-4 shrink-0" />
+              : <AlertCircle className="w-4 h-4 shrink-0" />}
+            {stnExportStatus.message}
           </div>
         )}
       </div>
@@ -486,39 +502,6 @@ export default function DataIngestion() {
         )}
       </div>
 
-      {/* Data Quality */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2 mb-1">
-          <ShieldAlert className="w-5 h-5 text-lgs-red" />
-          Data Quality
-        </h2>
-        <p className="text-sm text-slate-500 mb-4">
-          Download a report of assessment records whose STN does not match any enrolled student.
-          Use this to identify file mismatches or missing demographic uploads.
-        </p>
-
-        <button
-          onClick={handleExportUnmatchedStns}
-          disabled={isExportingStns}
-          className="flex items-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors text-sm"
-        >
-          <Download className="w-4 h-4" />
-          {isExportingStns ? 'Generating report…' : 'Download Unmatched STN Report'}
-        </button>
-
-        {stnExportStatus && (
-          <div className={`mt-3 p-3 rounded-lg flex items-center gap-2 text-sm ${
-            stnExportStatus.type === 'success'
-              ? 'bg-green-50 text-green-800 border border-green-200'
-              : 'bg-red-50 text-red-800 border border-red-200'
-          }`}>
-            {stnExportStatus.type === 'success'
-              ? <CheckCircle className="w-4 h-4 shrink-0" />
-              : <AlertCircle className="w-4 h-4 shrink-0" />}
-            {stnExportStatus.message}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
