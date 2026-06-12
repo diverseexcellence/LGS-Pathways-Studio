@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import StudentsList from './pages/StudentsList';
 import StudentProfile from './pages/StudentProfile';
 import DataIngestion from './pages/DataIngestion';
+import ExportPage from './pages/ExportPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -28,7 +29,7 @@ function AppRoutes() {
         <Route path="students" element={<ProtectedRoute><StudentsList /></ProtectedRoute>} />
         <Route path="students/:id" element={<ProtectedRoute><StudentProfile /></ProtectedRoute>} />
         <Route path="upload" element={<ProtectedRoute><DataIngestion /></ProtectedRoute>} />
-        <Route path="export" element={<ProtectedRoute><DataIngestion /></ProtectedRoute>} />
+        <Route path="export" element={<ProtectedRoute><ExportPage /></ProtectedRoute>} />
       </Route>
     </Routes>
   );
