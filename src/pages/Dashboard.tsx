@@ -266,11 +266,11 @@ export default function Dashboard() {
         import('html-to-image'),
         import('jspdf'),
       ]);
-      // html-to-image uses native browser rendering so oklch (Tailwind v4) works.
-      const dataUrl = await toPng(dashboardRef.current, {
-        pixelRatio: 2,
-        filter: (node) => !(node instanceof HTMLElement && node.dataset.pdfExclude === 'true'),
-      });
+      // Physically hide excluded elements during capture, then restore.
+      const excluded = dashboardRef.current.querySelectorAll<HTMLElement>('[data-pdf-exclude]');
+      excluded.forEach((el) => { el.style.visibility = 'hidden'; });
+      const dataUrl = await toPng(dashboardRef.current, { pixelRatio: 2 });
+      excluded.forEach((el) => { el.style.visibility = ''; });
       const img = new Image();
       img.src = dataUrl;
       await new Promise((res) => { img.onload = res; });
