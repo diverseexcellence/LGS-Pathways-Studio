@@ -598,9 +598,9 @@ export default function Dashboard() {
             <div className="mb-6">
               <h2 className="text-lg font-bold text-lgs-blue flex items-center gap-2 uppercase tracking-wide">
                 <Users className="w-5 h-5 text-slate-400" />
-                Caseload by Class Group
+                Caseload by Home Room
               </h2>
-              <p className="text-sm text-slate-500 mt-1">Distribution of student tiers across class groups.</p>
+              <p className="text-sm text-slate-500 mt-1">Distribution of Tier 1 / Tier 2 / Tier 3 students per homeroom teacher.</p>
             </div>
             <div className="h-[400px]">
               <ResponsiveContainer width="100%" height="100%">
