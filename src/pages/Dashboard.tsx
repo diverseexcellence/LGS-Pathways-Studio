@@ -267,7 +267,10 @@ export default function Dashboard() {
         import('jspdf'),
       ]);
       // html-to-image uses native browser rendering so oklch (Tailwind v4) works.
-      const dataUrl = await toPng(dashboardRef.current, { pixelRatio: 2 });
+      const dataUrl = await toPng(dashboardRef.current, {
+        pixelRatio: 2,
+        filter: (node) => !(node instanceof HTMLElement && node.dataset.pdfExclude === 'true'),
+      });
       const img = new Image();
       img.src = dataUrl;
       await new Promise((res) => { img.onload = res; });
@@ -306,6 +309,7 @@ export default function Dashboard() {
         <button
           onClick={exportPdf}
           disabled={exportingPdf}
+          data-pdf-exclude="true"
           className="flex items-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-semibold rounded-xl hover:bg-blue-900 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <Download className="w-4 h-4" />
