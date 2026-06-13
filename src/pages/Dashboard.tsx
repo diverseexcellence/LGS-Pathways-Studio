@@ -402,9 +402,9 @@ export default function Dashboard() {
           <div className="mb-2">
             <h2 className="text-lg font-bold text-lgs-blue flex items-center gap-2 uppercase tracking-wide">
               <Users className="w-5 h-5 text-lgs-red" />
-              Intervention Caseload
+              Tier Distribution
             </h2>
-            <p className="text-sm text-slate-500 mt-1">Distribution of students across support tiers.</p>
+            <p className="text-sm text-slate-500 mt-1">Distribution of finalized students across support tiers.</p>
           </div>
           <div className="flex-1 min-h-[200px]">
             <ResponsiveContainer width="100%" height="100%">
