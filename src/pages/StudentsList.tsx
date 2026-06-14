@@ -185,7 +185,7 @@ export default function StudentsList() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by name or class…"
+            placeholder="Search by name, STN, or class…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none text-sm"

@@ -3,6 +3,17 @@ import ReactMarkdown from 'react-markdown';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, Student, Assessment, AISummary, AuditEntry, CollaborationNote } from '../lib/api';
+
+const AUDIT_EVENT_LABELS: Record<string, string> = {
+  TierRecommendation: 'Tier Recommendation',
+  Edit: 'Profile Edit',
+  View: 'Profile Viewed',
+  Upload: 'Data Upload',
+  AI: 'AI Summary Generated',
+  Delete: 'Record Deleted',
+  Login: 'Login',
+  Error: 'System Error',
+};
 import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, FileJson, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X, Sparkles } from 'lucide-react';
 
 const MTSS_STRATEGIES: Record<string, string[]> = {
@@ -160,6 +171,9 @@ export default function StudentProfile() {
   const [showTierTooltip, setShowTierTooltip] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
 
+  // BRD ST-16 – Generate Recommendation
+  const [isGeneratingRec, setIsGeneratingRec] = useState(false);
+
   const studentId = id ?? '';
 
   useEffect(() => {
@@ -234,6 +248,21 @@ export default function StudentProfile() {
       alert('Failed to save tier: ' + e.message);
     } finally {
       setIsSavingTier(false);
+    }
+  }
+
+  async function handleGenerateRecommendation() {
+    setIsGeneratingRec(true);
+    try {
+      const updated = await studentsApi.recalculateTier(studentId);
+      setStudent(updated);
+      // Refresh audit trail to show the new recommendation entry
+      const auditResult = await studentAuditApi.list(studentId).catch(() => ({ items: [], total: 0, page: 1, pageSize: 50 }));
+      setAuditEntries(auditResult.items);
+    } catch (e: any) {
+      alert(e.message || 'Tier calculation failed.');
+    } finally {
+      setIsGeneratingRec(false);
     }
   }
 
@@ -379,8 +408,11 @@ export default function StudentProfile() {
           ))}
         </div>
 
-        {/* Footer: entry/exit + demographics link */}
+        {/* Footer: source line + entry/exit + demographics link (BRD §8.3.2) */}
         <div className="px-6 pb-4 flex flex-wrap items-center gap-4 text-xs text-slate-400">
+          {student.fileName && (
+            <span>Source: <span className="text-slate-600 font-mono">{student.fileName}</span></span>
+          )}
           {student.entryDate && (
             <span>Entry: <span className="text-slate-600">{new Date(student.entryDate).toLocaleDateString()}</span></span>
           )}
@@ -391,7 +423,7 @@ export default function StudentProfile() {
             onClick={() => setShowDemographics(true)}
             className="ml-auto text-lgs-red hover:underline font-medium text-xs"
           >
-            Full Demographics →
+            View All Demographics →
           </button>
         </div>
       </div>
@@ -527,25 +559,43 @@ export default function StudentProfile() {
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-lgs-blue">
             <h2 className="text-lg font-semibold text-lgs-blue mb-4">Tier Management</h2>
 
-            <label className="block text-sm font-medium text-slate-700 mb-2">Override / Finalize Tier</label>
-            <div className="flex gap-2">
-              <select
-                value={overrideTier}
-                onChange={e => setOverrideTier(e.target.value)}
-                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none"
-              >
-                <option value="">Select Tier...</option>
-                <option value="Tier 1">Tier 1</option>
-                <option value="Tier 2">Tier 2</option>
-                <option value="Tier 3">Tier 3</option>
-              </select>
+            {/* BRD ST-16: Generate Recommendation button */}
+            <div className="mb-4">
               <button
-                onClick={handleOverrideTier}
-                disabled={!overrideTier || isSavingTier}
-                className="px-4 py-2 bg-lgs-red text-white text-sm font-medium rounded-lg hover:bg-lgs-red-dark disabled:opacity-50"
+                onClick={handleGenerateRecommendation}
+                disabled={isGeneratingRec || student?.tierStatus === 'Finalized'}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
+                title={student?.tierStatus === 'Finalized' ? 'Tier is Finalized — use Override to change' : 'Run tier recommendation engine for this student'}
               >
-                {isSavingTier ? '...' : 'Save'}
+                <Sparkles className="w-4 h-4" />
+                {isGeneratingRec ? 'Calculating…' : 'Generate Recommendation'}
               </button>
+              {student?.tierStatus === 'Finalized' && (
+                <p className="text-xs text-slate-400 mt-1 text-center">Tier is Finalized — use Override below to change.</p>
+              )}
+            </div>
+
+            <div className="border-t border-slate-100 pt-4">
+              <label className="block text-sm font-medium text-slate-700 mb-2">Override / Finalize Tier</label>
+              <div className="flex gap-2">
+                <select
+                  value={overrideTier}
+                  onChange={e => setOverrideTier(e.target.value)}
+                  className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none"
+                >
+                  <option value="">Select Tier...</option>
+                  <option value="Tier 1">Tier 1</option>
+                  <option value="Tier 2">Tier 2</option>
+                  <option value="Tier 3">Tier 3</option>
+                </select>
+                <button
+                  onClick={handleOverrideTier}
+                  disabled={!overrideTier || isSavingTier}
+                  className="px-4 py-2 bg-lgs-red text-white text-sm font-medium rounded-lg hover:bg-lgs-red-dark disabled:opacity-50"
+                >
+                  {isSavingTier ? '...' : 'Save'}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -583,8 +633,13 @@ export default function StudentProfile() {
               <ul className="space-y-2 max-h-64 overflow-y-auto">
                 {auditEntries.map(e => (
                   <li key={e.id} className="text-xs border-b border-slate-100 pb-2 last:border-0 last:pb-0">
-                    <span className="text-slate-400">{formatAuditTimestamp(e.timestamp)}</span>
-                    <span className="ml-2 font-medium text-slate-700">{e.adminEmail}</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-slate-800">
+                        {AUDIT_EVENT_LABELS[e.eventType] ?? e.eventType}
+                      </span>
+                      <span className="text-slate-400">{formatAuditTimestamp(e.timestamp)}</span>
+                    </div>
+                    <p className="text-slate-500 mt-0.5">{e.adminEmail}</p>
                     {e.details && <p className="text-slate-600 mt-0.5 leading-snug">{e.details}</p>}
                   </li>
                 ))}

@@ -233,6 +233,124 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         return Ok(result);
     }
 
+    // ─── Grade-Level Proficiency (BRD DB-5) ──────────────────────────────────
+    // Segments by actual assessment proficiency bands (Above/On/Approaching/Below),
+    // NOT tier assignment.  Uses the most recent assessment per student per subject.
+
+    [HttpGet("by-grade-proficiency")]
+    public async Task<IActionResult> ByGradeProficiency()
+    {
+        var (students, _) = await cosmos.ListStudentsAsync(1, 10000, null, null, activeOnly: true);
+        var allAssessments = await cosmos.GetAllAssessmentsAsync();
+
+        // Index: studentId → most recent ELA assessment, most recent Math assessment
+        var latestByStudentSubject = allAssessments
+            .Where(a => NormalizeSubject(a.Subject) is "ELA" or "Math")
+            .GroupBy(a => $"{a.StudentId}|{NormalizeSubject(a.Subject)}")
+            .Select(g => g.OrderByDescending(a => a.Date ?? a.UploadedAt).First())
+            .ToList();
+
+        // grade → { above, on, approaching, below, noData }
+        var gradeMap = new Dictionary<string, ProficiencyBands>();
+
+        foreach (var s in students)
+        {
+            var grade = NormalizeGrade(s.Grade);
+            if (!gradeMap.TryGetValue(grade, out var bands))
+            {
+                bands = new ProficiencyBands();
+                gradeMap[grade] = bands;
+            }
+
+            var studentAssessments = latestByStudentSubject
+                .Where(a => a.StudentId == s.StudentId)
+                .ToList();
+
+            if (studentAssessments.Count == 0) { bands.NoData++; continue; }
+
+            // Resolve the lowest proficiency band across ELA + Math (conservative signal)
+            var proficiencies = studentAssessments
+                .Select(a => NormalizeProficiencyBand(a.Proficiency, a.RawFields))
+                .Where(p => p != null)
+                .ToList();
+
+            if (proficiencies.Count == 0) { bands.NoData++; continue; }
+
+            // Use lowest band: Below > Approaching > On > Above
+            var worst = proficiencies.OrderBy(BandSortKey).First()!;
+            switch (worst)
+            {
+                case "above":       bands.Above++;      break;
+                case "on":          bands.On++;         break;
+                case "approaching": bands.Approaching++;break;
+                default:            bands.Below++;      break;
+            }
+        }
+
+        var result = gradeMap
+            .OrderBy(kv => GradeSortKey(kv.Key))
+            .Select(kv =>
+            {
+                var b = kv.Value;
+                var total = b.Above + b.On + b.Approaching + b.Below + b.NoData;
+                if (total == 0) return null;
+                var scoredTotal = b.Above + b.On + b.Approaching + b.Below;
+                var t = scoredTotal > 0 ? scoredTotal : 1;
+                var above      = Math.Round((double)b.Above / t * 100);
+                var on         = Math.Round((double)b.On / t * 100);
+                var approaching = Math.Round((double)b.Approaching / t * 100);
+                return new
+                {
+                    grade       = kv.Key,
+                    above       = (int)above,
+                    on          = (int)on,
+                    approaching = (int)approaching,
+                    below       = 100 - (int)above - (int)on - (int)approaching,
+                    totalStudents = total,
+                };
+            })
+            .Where(r => r != null);
+
+        return Ok(result);
+    }
+
+    private static string? NormalizeProficiencyBand(string? proficiency, Dictionary<string, string> rawFields)
+    {
+        var p = (proficiency ?? "").ToLowerInvariant().Trim();
+        if (!string.IsNullOrEmpty(p))
+        {
+            if (p.Contains("far below") || p.Contains("did not pass") || p is "fail" or "no") return "below";
+            if (p.Contains("below")) return "below";
+            if (p.Contains("approaching")) return "approaching";
+            if (p.Contains("above") || p.Contains("exceeds") || p.Contains("mid above")) return "above";
+            if (p.Contains("on grade") || p.Contains("at grade") || p.Contains("at prof") ||
+                p.Contains("proficient") || p.Contains("meets") || p.Contains("early on") ||
+                p is "pass" or "yes") return "on";
+            if (p == "tier 1") return "on";
+            if (p is "tier 2") return "approaching";
+            if (p is "tier 3") return "below";
+        }
+        // Percentile fallback
+        foreach (var kv in rawFields)
+        {
+            if (kv.Key.Contains("percentile", StringComparison.OrdinalIgnoreCase) &&
+                double.TryParse(kv.Value, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var pct))
+                return pct >= 60 ? "above" : pct >= 40 ? "on" : pct >= 25 ? "approaching" : "below";
+        }
+        return null;
+    }
+
+    private static int BandSortKey(string? b) => b switch
+    {
+        "below" => 0, "approaching" => 1, "on" => 2, "above" => 3, _ => 4
+    };
+
+    private class ProficiencyBands
+    {
+        public int Above, On, Approaching, Below, NoData;
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     private static string NormalizeSubject(string? raw)

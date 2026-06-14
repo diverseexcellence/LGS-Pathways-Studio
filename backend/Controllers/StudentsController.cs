@@ -9,7 +9,7 @@ namespace LgsImpact.Api.Controllers;
 [ApiController]
 [Route("api/students")]
 [Authorize]
-public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : ControllerBase
+public class StudentsController(ICosmosDbService cosmos, IAuditService audit, ITierCalculationService tierCalculation) : ControllerBase
 {
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
@@ -68,18 +68,21 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
 
         // BRD ST-17: finalize produces a dedicated audit entry with prior→new tier values
         string auditDetails;
+        AuditEventType auditEventType;
         if (dto.TierStatus == "Finalized" && dto.Tier is not null)
         {
             auditDetails = $"Tier Overridden / Finalized by Admin — {student.FullName}: " +
                            $"Prior: {priorTier} ({priorTierStatus}) → New: {student.Tier} (Finalized)";
+            auditEventType = AuditEventType.TierRecommendation;
         }
         else
         {
             auditDetails = $"Edited {student.FullName}: {string.Join(", ", changed)}";
+            auditEventType = AuditEventType.Edit;
         }
 
         await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
-            AuditEventType.Edit, entityType: "Student", entityId: id,
+            auditEventType, entityType: "Student", entityId: id,
             details: auditDetails,
             ip: HttpContext.Connection.RemoteIpAddress?.ToString());
 
@@ -103,6 +106,34 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
 
         return NoContent();
     }
+    // BRD ST-16 / Generate Recommendation button: recalculate tier for a single student
+    [HttpPost("{id}/recalculate-tier")]
+    public async Task<IActionResult> RecalculateTier(string id)
+    {
+        var student = await cosmos.GetStudentAsync(id);
+        if (student is null || !student.IsActive) return NotFound();
+
+        // Don't overwrite a Finalized tier
+        if (student.TierStatus == "Finalized")
+            return BadRequest(new { message = "Tier is already Finalized. Use Override to change it." });
+
+        var priorTier = student.Tier;
+        var priorStatus = student.TierStatus;
+
+        await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);
+
+        // Re-fetch to return updated state
+        student = (await cosmos.GetStudentAsync(id))!;
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.TierRecommendation, entityType: "Student", entityId: id,
+            details: $"System Tier Recommendation Generated — {student.FullName}: " +
+                     $"Prior: {priorTier} ({priorStatus}) → New: {student.Tier} ({student.TierStatus})",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(student);
+    }
+
     // BRD ST-21 / NF-AUD-1: per-student audit log — accessible to all admins (not super-admin-only)
     [HttpGet("{id}/audit")]
     public async Task<IActionResult> GetAudit(string id,

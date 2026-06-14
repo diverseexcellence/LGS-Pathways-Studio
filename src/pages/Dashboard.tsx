@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TrendingUp, Award, Users, Target, Info, ChevronRight, ChevronLeft, Pencil, Check, X, Download } from 'lucide-react';
-import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis } from '../lib/api';
+import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis, GradeProficiencyRow } from '../lib/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
@@ -145,6 +145,9 @@ export default function Dashboard() {
   const [drillStudents, setDrillStudents] = useState<DrillStudent[]>([]);
   const [loadingDrill, setLoadingDrill] = useState(false);
 
+  // BRD DB-5: grade proficiency bands from actual assessment data
+  const [gradeProficiencyData, setGradeProficiencyData] = useState<GradeProficiencyRow[]>([]);
+
   useEffect(() => {
     async function fetchAll() {
       setLoadingStats(true);
@@ -207,11 +210,21 @@ export default function Dashboard() {
       }
     }
 
+    async function fetchGradeProficiency() {
+      try {
+        const data = await dashboardApi.byGradeProficiency();
+        setGradeProficiencyData(data);
+      } catch (e) {
+        console.error('Grade proficiency fetch failed', e);
+      }
+    }
+
     fetchAll();
     fetchConfig();
     fetchGrades();
     fetchKpis();
     fetchTimeline();
+    fetchGradeProficiency();
   }, []);
 
   async function drillToTeachers(grade: string) {
@@ -432,8 +445,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Grade-level breakdown */}
-      {stats.gradeData.length > 0 && (
+      {/* Grade-level breakdown — BRD DB-5: proficiency bands from assessment data */}
+      {gradeProficiencyData.length > 0 && (
         <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
           <div className="mb-6">
             <h2 className="text-lg font-bold text-lgs-blue flex items-center gap-2 uppercase tracking-wide">
@@ -444,14 +457,15 @@ export default function Dashboard() {
           </div>
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stats.gradeData} layout="vertical" margin={{ top: 0, right: 0, left: 0, bottom: 0 }} barSize={24}>
-                <XAxis type="number" hide />
+              <BarChart data={gradeProficiencyData} layout="vertical" margin={{ top: 0, right: 0, left: 0, bottom: 0 }} barSize={24}>
+                <XAxis type="number" domain={[0, 100]} hide />
                 <YAxis dataKey="grade" type="category" axisLine={false} tickLine={false} tick={{ fill: '#214965', fontSize: 12, fontWeight: 600 }} width={80} />
-                <RechartsTooltip formatter={(v: number) => [`${v}%`, '']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                <RechartsTooltip formatter={(v: number, name: string) => [`${v}%`, name]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
                 <Legend iconType="square" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                <Bar dataKey="proficient" name="Proficient" stackId="a" fill="#214965" radius={[4, 0, 0, 4]} />
-                <Bar dataKey="developing" name="Developing" stackId="a" fill="#9ca3af" />
-                <Bar dataKey="critical" name="Critical Concern" stackId="a" fill="#b91c1c" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="above" name="Above" stackId="a" fill="#15803d" radius={[4, 0, 0, 4]} />
+                <Bar dataKey="on" name="On Grade" stackId="a" fill="#214965" />
+                <Bar dataKey="approaching" name="Approaching" stackId="a" fill="#d97706" />
+                <Bar dataKey="below" name="Below" stackId="a" fill="#b91c1c" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
