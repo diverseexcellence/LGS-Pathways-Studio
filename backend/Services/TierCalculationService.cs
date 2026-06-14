@@ -32,9 +32,10 @@ public class TierCalculationService(
             var priorTier       = student.Tier;
             var priorTierStatus = student.TierStatus;
 
-            student.Tier        = result.Tier!;
-            student.TierStatus  = TierStatus.SystemRecommended;
-            student.LastUpdated = DateTime.UtcNow.ToString("o");
+            student.Tier              = result.Tier!;
+            student.TierStatus        = TierStatus.SystemRecommended;
+            student.TierPendingReason = null;
+            student.LastUpdated       = DateTime.UtcNow.ToString("o");
             await cosmos.UpsertStudentAsync(student);
 
             await audit.LogAsync(
@@ -47,9 +48,10 @@ public class TierCalculationService(
         }
         else if (result.TierStatus == TierStatus.Pending && student.TierStatus != TierStatus.Finalized)
         {
-            // Keep as Pending but record why (insufficient data)
-            student.TierStatus  = TierStatus.Pending;
-            student.LastUpdated = DateTime.UtcNow.ToString("o");
+            // Keep as Pending but record why (insufficient data) — BRD G8
+            student.TierStatus        = TierStatus.Pending;
+            student.TierPendingReason = result.PendingReason;
+            student.LastUpdated       = DateTime.UtcNow.ToString("o");
             await cosmos.UpsertStudentAsync(student);
         }
     }
@@ -92,9 +94,12 @@ public class TierCalculationService(
         // Step 3: combine
         if (elaOnAbove is null && mathOnAbove is null)
         {
+            var noAssessments = (latestEla is null && latestMath is null && latestReading is null);
+            var pendingReason = noAssessments ? "no_assessments" : "no_proficiency_or_percentile";
             return new TierResult(
                 TierStatus.Pending, null,
-                "Pending: no assessments with evaluable proficiency or percentile data.");
+                "Pending: no assessments with evaluable proficiency or percentile data.",
+                pendingReason);
         }
 
         if (elaOnAbove is null || mathOnAbove is null)
@@ -227,4 +232,4 @@ public static class TierStatus
     public const string Finalized           = "Finalized";
 }
 
-public record TierResult(string TierStatus, string? Tier, string Reasoning);
+public record TierResult(string TierStatus, string? Tier, string Reasoning, string? PendingReason = null);

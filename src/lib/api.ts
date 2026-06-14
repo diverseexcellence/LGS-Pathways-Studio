@@ -65,6 +65,7 @@ export interface Student {
   isActive: boolean;
   tier?: string;
   tierStatus?: string;
+  tierPendingReason?: string;
   grade?: string;
   gender?: string;
   ethnicity?: string;
@@ -77,6 +78,29 @@ export interface Student {
   exitDate?: string;
   lunchStatus?: string;
   fileName?: string;
+}
+
+export interface AuditEntry {
+  id: string;
+  adminId: number;
+  adminEmail: string;
+  eventType: string;
+  entityType: string | null;
+  entityId: string | null;
+  details: string | null;
+  timestamp: string;
+  ipAddress: string | null;
+}
+
+export interface CollaborationNote {
+  id: string;
+  studentId: string;
+  text: string;
+  createdAt: string;
+  createdBy: string;
+  isDeleted: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
 }
 
 export interface Assessment {
@@ -259,6 +283,27 @@ export const aiApi = {
 
 export const auditApi = {
   list: () => request<any[]>('/api/audit'),
+};
+
+export const studentAuditApi = {
+  list: (studentId: string, page = 1, pageSize = 50) =>
+    request<PagedResult<AuditEntry>>(`/api/students/${studentId}/audit?page=${page}&pageSize=${pageSize}`),
+};
+
+// ─── Collaboration Notes ──────────────────────────────────────────────────────
+
+export const notesApi = {
+  list: (studentId: string) =>
+    request<CollaborationNote[]>(`/api/students/${studentId}/notes`),
+
+  create: (studentId: string, text: string) =>
+    request<CollaborationNote>(`/api/students/${studentId}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+
+  delete: (studentId: string, noteId: string) =>
+    request<void>(`/api/students/${studentId}/notes/${noteId}`, { method: 'DELETE' }),
 };
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────

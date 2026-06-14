@@ -45,6 +45,13 @@ public interface ICosmosDbService
     // Audit Logs
     Task CreateAuditLogAsync(AuditLogDocument log);
     Task<(List<AuditLogDocument> Items, int Total)> GetAuditLogsAsync(int page, int pageSize, string? eventType);
+    Task<(List<AuditLogDocument> Items, int Total)> GetAuditLogsByEntityIdAsync(string entityId, int page, int pageSize);
+
+    // Collaboration Notes
+    Task<List<CollaborationNoteDocument>> GetNotesAsync(string studentId);
+    Task<CollaborationNoteDocument?> GetNoteAsync(string studentId, string noteId);
+    Task CreateNoteAsync(CollaborationNoteDocument note);
+    Task UpsertNoteAsync(CollaborationNoteDocument note);
 
     // Config (school averages + prompt)
     Task<SchoolAverageDocument?> GetSchoolAveragesAsync();
@@ -73,6 +80,7 @@ public class CosmosDbService : ICosmosDbService
     private Container ExportLogs => _client.GetContainer(_databaseId, "export-logs");
     private Container AuditLogs => _client.GetContainer(_databaseId, "audit-logs");
     private Container Config => _client.GetContainer(_databaseId, "config");
+    private Container CollaborationNotes => _client.GetContainer(_databaseId, "collaboration-notes");
 
     public CosmosDbService(IConfiguration config)
     {
@@ -482,6 +490,64 @@ public class CosmosDbService : ICosmosDbService
         return (items, total);
     }
 
+    // ─── Collaboration Notes ──────────────────────────────────────────────────
+
+    public async Task<List<CollaborationNoteDocument>> GetNotesAsync(string studentId)
+    {
+        var items = new List<CollaborationNoteDocument>();
+        var q = CollaborationNotes.GetItemLinqQueryable<CollaborationNoteDocument>()
+            .Where(n => n.StudentId == studentId && !n.IsDeleted)
+            .ToFeedIterator();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            items.AddRange(pg);
+        }
+        return items.OrderByDescending(n => n.CreatedAt).ToList();
+    }
+
+    public async Task<CollaborationNoteDocument?> GetNoteAsync(string studentId, string noteId)
+    {
+        var q = CollaborationNotes.GetItemLinqQueryable<CollaborationNoteDocument>()
+            .Where(n => n.Id == noteId && n.StudentId == studentId)
+            .ToFeedIterator();
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            var item = pg.FirstOrDefault();
+            if (item != null) return item;
+        }
+        return null;
+    }
+
+    public async Task CreateNoteAsync(CollaborationNoteDocument note)
+        => await CollaborationNotes.CreateItemAsync(note, new PartitionKey(note.StudentId));
+
+    public async Task UpsertNoteAsync(CollaborationNoteDocument note)
+        => await CollaborationNotes.UpsertItemAsync(note, new PartitionKey(note.StudentId));
+
+    public async Task<(List<AuditLogDocument> Items, int Total)> GetAuditLogsByEntityIdAsync(
+        string entityId, int page, int pageSize)
+    {
+        // Cross-partition query required since audit logs are partitioned by adminEmail
+        var sql = new QueryDefinition(
+            "SELECT * FROM c WHERE c.entityId = @entityId ORDER BY c.timestamp DESC")
+            .WithParameter("@entityId", entityId);
+
+        var all = new List<AuditLogDocument>();
+        var iter = AuditLogs.GetItemQueryIterator<AuditLogDocument>(
+            sql, requestOptions: new QueryRequestOptions { MaxItemCount = -1 });
+        while (iter.HasMoreResults)
+        {
+            var pg = await iter.ReadNextAsync();
+            all.AddRange(pg);
+        }
+
+        var total = all.Count;
+        var items = all.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        return (items, total);
+    }
+
     // ─── Seed ────────────────────────────────────────────────────────────────
 
     public async Task SeedAdminsIfEmptyAsync()
@@ -583,8 +649,9 @@ public class CosmosDbService : ICosmosDbService
             ("ai-summaries", "/studentId"),
             ("upload-logs",  "/uploadedBy"),
             ("export-logs",  "/exportedBy"),
-            ("audit-logs",   "/adminEmail"),
-            ("config",       "/partitionKey"),
+            ("audit-logs",             "/adminEmail"),
+            ("config",                 "/partitionKey"),
+            ("collaboration-notes",    "/studentId"),
         };
 
         foreach (var (name, partitionKey) in containers)

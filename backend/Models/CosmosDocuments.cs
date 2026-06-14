@@ -51,6 +51,10 @@ public class StudentDocument
     [JsonProperty("tierStatus")]
     public string TierStatus { get; set; } = "Pending";
 
+    /// <summary>BRD G8: reason code when tier cannot be computed ("no_assessments" | "no_proficiency_or_percentile").</summary>
+    [JsonProperty("tierPendingReason")]
+    public string? TierPendingReason { get; set; }
+
     [JsonProperty("isActive")]
     public bool IsActive { get; set; } = true;
 
@@ -282,6 +286,33 @@ public class TargetGoalDocument
 
     [JsonProperty("updatedBy")]
     public string? UpdatedBy { get; set; }
+}
+
+public class CollaborationNoteDocument
+{
+    [JsonProperty("id")]
+    public string Id { get; set; } = default!;
+
+    [JsonProperty("studentId")]
+    public string StudentId { get; set; } = default!;
+
+    [JsonProperty("text")]
+    public string Text { get; set; } = default!;
+
+    [JsonProperty("createdAt")]
+    public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
+
+    [JsonProperty("createdBy")]
+    public string CreatedBy { get; set; } = default!;
+
+    [JsonProperty("isDeleted")]
+    public bool IsDeleted { get; set; } = false;
+
+    [JsonProperty("deletedAt")]
+    public string? DeletedAt { get; set; }
+
+    [JsonProperty("deletedBy")]
+    public string? DeletedBy { get; set; }
 }
 
 public class AdminDocument
