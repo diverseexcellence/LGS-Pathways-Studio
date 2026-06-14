@@ -192,6 +192,9 @@ export const studentsApi = {
 
   softDelete: (id: string) =>
     request<void>(`/api/students/${id}`, { method: 'DELETE' }),
+
+  recalculateTier: (id: string) =>
+    request<Student>(`/api/students/${id}/recalculate-tier`, { method: 'POST' }),
 };
 
 // ─── Assessments ──────────────────────────────────────────────────────────────
@@ -309,6 +312,7 @@ export const notesApi = {
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export interface GradeRow { grade: string; tier1: number; tier2: number; tier3: number; total: number }
+export interface GradeProficiencyRow { grade: string; above: number; on: number; approaching: number; below: number; totalStudents: number }
 export interface TeacherRow { teacher: string; tier1: number; tier2: number; tier3: number; total: number }
 export interface DrillStudent { studentId: string; fullName: string; tier: string; tierStatus: string; classGroup: string; homeRoom: string | null }
 export interface TimelinePoint { month: string; year: number; monthKey: string; ela: number | null; math: number | null }
@@ -328,4 +332,5 @@ export const dashboardApi = {
   studentsByGrade: (grade: string) => request<DrillStudent[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/students`),
   kpis: () => request<DashboardKpis>('/api/dashboard/kpis'),
   timeline: () => request<TimelinePoint[]>('/api/dashboard/timeline'),
+  byGradeProficiency: () => request<GradeProficiencyRow[]>('/api/dashboard/by-grade-proficiency'),
 };

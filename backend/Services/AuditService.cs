@@ -2,7 +2,7 @@ using LgsImpact.Api.Models;
 
 namespace LgsImpact.Api.Services;
 
-public enum AuditEventType { Login, Upload, View, Edit, Export, AI, Delete, Error }
+public enum AuditEventType { Login, Upload, View, Edit, Export, AI, Delete, Error, TierRecommendation }
 
 public interface IAuditService
 {
