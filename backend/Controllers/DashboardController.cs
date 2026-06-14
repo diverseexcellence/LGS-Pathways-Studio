@@ -143,7 +143,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
 
         foreach (var s in students)
         {
-            if (s.TierStatus == "Pending") continue;
+            // BRD DB-4: only Finalized students in tier distribution
+            if (s.TierStatus != "Finalized") continue;
 
             var grade = NormalizeGrade(s.Grade);
             if (!gradeMap.TryGetValue(grade, out var gs))
@@ -181,7 +182,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         foreach (var s in students)
         {
             if (NormalizeGrade(s.Grade) != grade) continue;
-            if (s.TierStatus == "Pending") continue;
+            // BRD DB-4: only Finalized students in tier distribution
+            if (s.TierStatus != "Finalized") continue;
 
             var teacher = s.HomeRoom ?? s.ClassGroup ?? "Unassigned";
             if (!teacherMap.TryGetValue(teacher, out var ts))

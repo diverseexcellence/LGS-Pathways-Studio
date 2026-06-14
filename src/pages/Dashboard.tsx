@@ -40,8 +40,8 @@ function buildStats(students: Student[]): Stats {
     const grade = s.grade ? `Grade ${String(s.grade).replace(/^0+(?=\d)/, '')}` : 'Unknown';
     const homeRoom = s.homeRoom || s.classGroup || 'Unassigned';
 
-    // Only count tiered (non-Pending tierStatus) students in distribution aggregations
-    if (tierStatus === 'Pending') continue;
+    // BRD DB-4: only Finalized students count in tier distribution aggregations
+    if (tierStatus !== 'Finalized') continue;
 
     if (tier === 'Tier 1') t1++;
     else if (tier === 'Tier 2') t2++;

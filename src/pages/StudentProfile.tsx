@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { studentsApi, assessmentsApi, aiApi, Student, Assessment, AISummary } from '../lib/api';
+import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, Student, Assessment, AISummary, AuditEntry, CollaborationNote } from '../lib/api';
 import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, FileJson, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X, Sparkles } from 'lucide-react';
 
 const MTSS_STRATEGIES: Record<string, string[]> = {
@@ -147,6 +147,19 @@ export default function StudentProfile() {
 
   const [assessmentSortConfig, setAssessmentSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
 
+  // G1 – Audit Trail
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+
+  // G2 – Collaboration Notes
+  const [notes, setNotes] = useState<CollaborationNote[]>([]);
+  const [noteText, setNoteText] = useState('');
+  const [isPostingNote, setIsPostingNote] = useState(false);
+
+  // G6 – tier criteria tooltip
+  const [showTierTooltip, setShowTierTooltip] = useState(false);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
   const studentId = id ?? '';
 
   useEffect(() => {
@@ -158,19 +171,56 @@ export default function StudentProfile() {
     setLoading(true);
     setError('');
     try {
-      const [s, a, ai] = await Promise.all([
+      const [s, a, ai, auditResult, notesList] = await Promise.all([
         studentsApi.get(studentId),
         assessmentsApi.byStudent(studentId),
         aiApi.get(studentId).catch(() => null),
+        studentAuditApi.list(studentId).catch(() => ({ items: [], total: 0, page: 1, pageSize: 50 })),
+        notesApi.list(studentId).catch(() => [] as CollaborationNote[]),
       ]);
       setStudent(s);
       setAssessments(a);
       setAiSummary(ai);
+      setAuditEntries(auditResult.items);
+      setNotes(notesList);
     } catch (e: any) {
       setError(e.message || 'Failed to load student data');
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handlePostNote() {
+    if (!noteText.trim()) return;
+    setIsPostingNote(true);
+    try {
+      const note = await notesApi.create(studentId, noteText.trim());
+      setNotes(prev => [note, ...prev]);
+      setNoteText('');
+    } catch (e: any) {
+      alert('Failed to save note: ' + e.message);
+    } finally {
+      setIsPostingNote(false);
+    }
+  }
+
+  async function handleDeleteNote(noteId: string) {
+    if (!confirm('Delete this note?')) return;
+    try {
+      await notesApi.delete(studentId, noteId);
+      setNotes(prev => prev.filter(n => n.id !== noteId));
+    } catch (e: any) {
+      alert('Failed to delete note: ' + e.message);
+    }
+  }
+
+  function formatAuditTimestamp(ts: string) {
+    try {
+      return new Date(ts).toLocaleString('en-US', {
+        month: '2-digit', day: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch { return ts; }
   }
 
   async function handleOverrideTier() {
@@ -416,13 +466,34 @@ export default function StudentProfile() {
                 <Sparkles className="w-5 h-5 text-lgs-red" />
                 AI Progress Summary
               </h2>
-              <button
-                onClick={handleGenerateAI}
-                disabled={isGeneratingAI}
-                className="flex items-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
-              >
-                {isGeneratingAI ? 'Generating...' : aiSummary ? 'Regenerate' : 'Generate AI Summary'}
-              </button>
+              <div className="flex items-center gap-2">
+                {/* G6: Tier rules tooltip */}
+                <div className="relative" ref={tooltipRef}>
+                  <button
+                    onMouseEnter={() => setShowTierTooltip(true)}
+                    onMouseLeave={() => setShowTierTooltip(false)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-lgs-blue hover:bg-slate-100 transition-colors"
+                    title="Tiering Criteria"
+                  >
+                    <Info className="w-4 h-4" />
+                  </button>
+                  {showTierTooltip && (
+                    <div className="absolute right-0 top-8 z-20 w-64 bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-xs text-slate-700">
+                      <p className="font-semibold text-slate-800 mb-1.5">Tiering Criteria</p>
+                      <p><span className="text-green-600 font-medium">Tier 1:</span> On/Above in both Math & ELA</p>
+                      <p className="mt-1"><span className="text-yellow-600 font-medium">Tier 2:</span> On/Above in one subject</p>
+                      <p className="mt-1"><span className="text-red-600 font-medium">Tier 3:</span> Below in both subjects</p>
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={handleGenerateAI}
+                  disabled={isGeneratingAI}
+                  className="flex items-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
+                >
+                  {isGeneratingAI ? 'Generating...' : aiSummary ? 'Regenerate' : 'Generate AI Summary'}
+                </button>
+              </div>
             </div>
             {aiSummary ? (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
@@ -451,39 +522,30 @@ export default function StudentProfile() {
           </div>
         </div>
 
-        {/* Right: Tier Management */}
+        {/* Right: Tier Management + Audit Trail */}
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-lgs-blue">
             <h2 className="text-lg font-semibold text-lgs-blue mb-4">Tier Management</h2>
 
-            <div className="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-100 text-sm">
-              <p className="font-medium text-slate-700 mb-2">Tiering Criteria</p>
-              <p><span className="text-green-600 font-medium">Tier 1:</span> On/Above in both Math & ELA</p>
-              <p className="mt-1"><span className="text-yellow-600 font-medium">Tier 2:</span> On/Above in one subject</p>
-              <p className="mt-1"><span className="text-red-600 font-medium">Tier 3:</span> Below in both subjects</p>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Override / Finalize Tier</label>
-              <div className="flex gap-2">
-                <select
-                  value={overrideTier}
-                  onChange={e => setOverrideTier(e.target.value)}
-                  className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none"
-                >
-                  <option value="">Select Tier...</option>
-                  <option value="Tier 1">Tier 1</option>
-                  <option value="Tier 2">Tier 2</option>
-                  <option value="Tier 3">Tier 3</option>
-                </select>
-                <button
-                  onClick={handleOverrideTier}
-                  disabled={!overrideTier || isSavingTier}
-                  className="px-4 py-2 bg-lgs-red text-white text-sm font-medium rounded-lg hover:bg-lgs-red-dark disabled:opacity-50"
-                >
-                  {isSavingTier ? '...' : 'Save'}
-                </button>
-              </div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Override / Finalize Tier</label>
+            <div className="flex gap-2">
+              <select
+                value={overrideTier}
+                onChange={e => setOverrideTier(e.target.value)}
+                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none"
+              >
+                <option value="">Select Tier...</option>
+                <option value="Tier 1">Tier 1</option>
+                <option value="Tier 2">Tier 2</option>
+                <option value="Tier 3">Tier 3</option>
+              </select>
+              <button
+                onClick={handleOverrideTier}
+                disabled={!overrideTier || isSavingTier}
+                className="px-4 py-2 bg-lgs-red text-white text-sm font-medium rounded-lg hover:bg-lgs-red-dark disabled:opacity-50"
+              >
+                {isSavingTier ? '...' : 'Save'}
+              </button>
             </div>
           </div>
 
@@ -508,7 +570,73 @@ export default function StudentProfile() {
             </div>
             <p className="text-slate-500 text-sm">Learning plans are stored locally in this session. A dedicated API endpoint will persist them in a future release.</p>
           </div>
+
+          {/* G1 – Audit Trail (BRD ST-21) */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <h2 className="text-lg font-semibold text-lgs-blue mb-4 flex items-center gap-2">
+              <Clock className="w-5 h-5 text-lgs-red" />
+              Audit Trail
+            </h2>
+            {auditEntries.length === 0 ? (
+              <p className="text-slate-500 text-sm">No audit events recorded yet.</p>
+            ) : (
+              <ul className="space-y-2 max-h-64 overflow-y-auto">
+                {auditEntries.map(e => (
+                  <li key={e.id} className="text-xs border-b border-slate-100 pb-2 last:border-0 last:pb-0">
+                    <span className="text-slate-400">{formatAuditTimestamp(e.timestamp)}</span>
+                    <span className="ml-2 font-medium text-slate-700">{e.adminEmail}</span>
+                    {e.details && <p className="text-slate-600 mt-0.5 leading-snug">{e.details}</p>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
+      </div>
+
+      {/* G2 – Collaboration Notes (BRD ST-20) — full-width below the two-column grid */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <h2 className="text-lg font-semibold text-lgs-blue mb-4 flex items-center gap-2">
+          <MessageSquare className="w-5 h-5 text-lgs-red" />
+          Collaboration Notes
+        </h2>
+        <div className="flex gap-2 mb-4">
+          <textarea
+            value={noteText}
+            onChange={e => setNoteText(e.target.value)}
+            rows={2}
+            placeholder="Add a collaboration note…"
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none resize-none"
+          />
+          <button
+            onClick={handlePostNote}
+            disabled={isPostingNote || !noteText.trim()}
+            className="px-4 py-2 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 self-start mt-0"
+          >
+            {isPostingNote ? '...' : 'Post'}
+          </button>
+        </div>
+        {notes.length === 0 ? (
+          <p className="text-slate-500 text-sm">No collaboration notes yet.</p>
+        ) : (
+          <ul className="space-y-3 max-h-72 overflow-y-auto">
+            {notes.map(n => (
+              <li key={n.id} className="flex items-start gap-3 bg-slate-50 rounded-lg p-3 border border-slate-100">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-slate-800 whitespace-pre-wrap break-words">{n.text}</p>
+                  <p className="text-xs text-slate-400 mt-1">{n.createdBy} · {formatAuditTimestamp(n.createdAt)}</p>
+                </div>
+                <button
+                  onClick={() => handleDeleteNote(n.id)}
+                  className="shrink-0 text-slate-300 hover:text-red-500 transition-colors"
+                  title="Delete note"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {/* Demographics Modal */}
@@ -551,35 +679,86 @@ export default function StudentProfile() {
         </div>
       )}
 
-      {/* Assessment Details Modal */}
-      {selectedAssessment && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg max-w-lg w-full p-6">
-            <h3 className="text-lg font-bold text-slate-900 mb-4">Assessment Details</h3>
-            <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-lg border border-slate-100 text-sm">
-              {[
-                ['Assessment ID', selectedAssessment.id],
-                ['Type', selectedAssessment.uploadType],
-                ['Subject', selectedAssessment.subject],
-                ['Score', selectedAssessment.score],
-                ['Proficiency', selectedAssessment.proficiency],
-                ['Period', selectedAssessment.period],
-                ['Date', formatDate(selectedAssessment.date ?? '')],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <span className="block text-xs text-slate-500 font-medium mb-1">{label}</span>
-                  <span className="text-slate-900">{String(value ?? 'N/A')}</span>
+      {/* G5 – Enriched Assessment Details Modal */}
+      {selectedAssessment && (() => {
+        const raw = selectedAssessment.rawFields ?? {};
+        const SECTION_KEYS: Record<string, string[]> = {
+          'Assessment Summary':   ['assessment name', 'test name', 'assessment', 'form', 'grade', 'period', 'date', 'school year'],
+          'Overall Result':       ['score', 'total score', 'scale score', 'raw score', 'proficiency', 'overall', 'result', 'passed'],
+          'Performance Levels':   ['level', 'performance level', 'achievement level', 'band', 'tier'],
+          'Category Performance': ['category', 'strand', 'domain', 'standard', 'skill', 'reading', 'writing', 'math', 'science'],
+          'Key Observation':      ['observation', 'note', 'comment', 'flag', 'status'],
+          'Source Reference':     ['file', 'source', 'upload', 'id', 'record'],
+        };
+        function assignSection(key: string) {
+          const lk = key.toLowerCase();
+          for (const [section, keywords] of Object.entries(SECTION_KEYS)) {
+            if (keywords.some(kw => lk.includes(kw))) return section;
+          }
+          return 'Other';
+        }
+        const grouped: Record<string, [string, string][]> = {};
+        for (const [k, v] of Object.entries(raw)) {
+          const sec = assignSection(k);
+          if (!grouped[sec]) grouped[sec] = [];
+          grouped[sec].push([k, v]);
+        }
+        const sectionOrder = [...Object.keys(SECTION_KEYS), 'Other'];
+        return (
+          <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold text-slate-900">Assessment Details</h3>
+                <button onClick={() => setSelectedAssessment(null)} className="text-slate-400 hover:text-slate-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Core fields */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-lg border border-slate-100 text-sm mb-4">
+                {[
+                  ['Type', selectedAssessment.uploadType],
+                  ['Subject', normalizeSubject(selectedAssessment.subject ?? '')],
+                  ['Score', selectedAssessment.score ?? 'N/A'],
+                  ['Proficiency', normalizeProficiency(selectedAssessment.proficiency ?? 'N/A')],
+                  ['Period', selectedAssessment.period ?? 'N/A'],
+                  ['Date', formatDate(selectedAssessment.date ?? '')],
+                ].map(([label, value]) => (
+                  <div key={String(label)}>
+                    <span className="block text-xs text-slate-500 font-medium mb-0.5">{label}</span>
+                    <span className="text-slate-900 font-medium">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Raw fields grouped by section */}
+              {Object.keys(raw).length > 0 && (
+                <div className="space-y-4">
+                  {sectionOrder.filter(sec => grouped[sec]?.length).map(sec => (
+                    <div key={sec}>
+                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{sec}</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {grouped[sec].map(([k, v]) => (
+                          <div key={k} className="bg-slate-50 rounded p-2 border border-slate-100 text-xs">
+                            <span className="block text-slate-400 font-medium truncate" title={k}>{k}</span>
+                            <span className="text-slate-800 break-words">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className="mt-6 flex justify-end">
-              <button onClick={() => setSelectedAssessment(null)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">
-                Close
-              </button>
+              )}
+
+              <div className="mt-6 flex justify-end">
+                <button onClick={() => setSelectedAssessment(null)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">
+                  Close
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Learning Plan Modal */}
       {showPlanModal && (

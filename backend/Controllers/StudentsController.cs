@@ -52,6 +52,10 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
         var student = await cosmos.GetStudentAsync(id);
         if (student is null || !student.IsActive) return NotFound();
 
+        // Capture prior tier values before mutation (needed for finalize audit entry)
+        var priorTier = student.Tier;
+        var priorTierStatus = student.TierStatus;
+
         var changed = new List<string>();
         if (dto.ClassGroup is not null) { student.ClassGroup = dto.ClassGroup; changed.Add($"ClassGroup→{dto.ClassGroup}"); }
         if (dto.Grade is not null) { student.Grade = dto.Grade; changed.Add($"Grade→{dto.Grade}"); }
@@ -62,9 +66,21 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
 
         await cosmos.UpsertStudentAsync(student);
 
+        // BRD ST-17: finalize produces a dedicated audit entry with prior→new tier values
+        string auditDetails;
+        if (dto.TierStatus == "Finalized" && dto.Tier is not null)
+        {
+            auditDetails = $"Tier Overridden / Finalized by Admin — {student.FullName}: " +
+                           $"Prior: {priorTier} ({priorTierStatus}) → New: {student.Tier} (Finalized)";
+        }
+        else
+        {
+            auditDetails = $"Edited {student.FullName}: {string.Join(", ", changed)}";
+        }
+
         await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
             AuditEventType.Edit, entityType: "Student", entityId: id,
-            details: $"Edited {student.FullName}: {string.Join(", ", changed)}",
+            details: auditDetails,
             ip: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(student);
@@ -87,6 +103,69 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
 
         return NoContent();
     }
+    // BRD ST-21 / NF-AUD-1: per-student audit log — accessible to all admins (not super-admin-only)
+    [HttpGet("{id}/audit")]
+    public async Task<IActionResult> GetAudit(string id,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
+    {
+        var (items, total) = await cosmos.GetAuditLogsByEntityIdAsync(id, page, pageSize);
+        return Ok(new { items, total, page, pageSize });
+    }
+
+    // ─── Collaboration Notes (BRD ST-20) ──────────────────────────────────────
+
+    [HttpGet("{id}/notes")]
+    public async Task<IActionResult> GetNotes(string id)
+    {
+        var notes = await cosmos.GetNotesAsync(id);
+        return Ok(notes);
+    }
+
+    [HttpPost("{id}/notes")]
+    public async Task<IActionResult> CreateNote(string id, [FromBody] CreateNoteDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Text))
+            return BadRequest(new { message = "Note text is required." });
+
+        var note = new LgsImpact.Api.Models.CollaborationNoteDocument
+        {
+            Id        = $"note-{Guid.NewGuid():N}",
+            StudentId = id,
+            Text      = dto.Text.Trim(),
+            CreatedAt = DateTime.UtcNow.ToString("o"),
+            CreatedBy = CurrentAdminEmail,
+        };
+
+        await cosmos.CreateNoteAsync(note);
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Edit, entityType: "CollaborationNote", entityId: id,
+            details: $"Added collaboration note for student {id}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(note);
+    }
+
+    [HttpDelete("{id}/notes/{noteId}")]
+    public async Task<IActionResult> DeleteNote(string id, string noteId)
+    {
+        var note = await cosmos.GetNoteAsync(id, noteId);
+        if (note is null) return NotFound();
+
+        note.IsDeleted  = true;
+        note.DeletedAt  = DateTime.UtcNow.ToString("o");
+        note.DeletedBy  = CurrentAdminEmail;
+        await cosmos.UpsertNoteAsync(note);
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Delete, entityType: "CollaborationNote", entityId: id,
+            details: $"Deleted collaboration note {noteId} for student {id}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return NoContent();
+    }
+
     [HttpDelete("cleanup-numeric-names")]
     public async Task<IActionResult> CleanupNumericNames()
     {
@@ -103,3 +182,4 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit) : 
 }
 
 public record StudentUpdateDto(string? ClassGroup, string? Grade, string? Tier, string? TierStatus, string? HomeRoom);
+public record CreateNoteDto(string Text);
