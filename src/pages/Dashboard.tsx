@@ -38,7 +38,7 @@ function buildStats(students: Student[]): Stats {
     const tier = s.tier || 'Pending';
     const tierStatus = s.tierStatus || 'Pending';
     const grade = s.grade ? `Grade ${String(s.grade).replace(/^0+(?=\d)/, '')}` : 'Unknown';
-    const homeRoom = s.classGroup || 'Unassigned';
+    const homeRoom = s.homeRoom || s.classGroup || 'Unassigned';
 
     // Only count tiered (non-Pending tierStatus) students in distribution aggregations
     if (tierStatus === 'Pending') continue;
@@ -67,11 +67,13 @@ function buildStats(students: Student[]): Stats {
     .map(k => {
       const g = gradeMap[k];
       const gt = g.proficient + g.developing + g.critical || 1;
+      const proficient = Math.round((g.proficient / gt) * 100);
+      const developing = Math.round((g.developing / gt) * 100);
       return {
         grade: k,
-        proficient: Math.round((g.proficient / gt) * 100),
-        developing: Math.round((g.developing / gt) * 100),
-        critical: Math.round((g.critical / gt) * 100),
+        proficient,
+        developing,
+        critical: 100 - proficient - developing,
       };
     });
 
@@ -339,7 +341,7 @@ export default function Dashboard() {
           sub={kpis == null ? '' : kpis.mathStudentsTotal > 0 ? `${kpis.mathStudentsOnAbove} of ${kpis.mathStudentsTotal} students On/Above` : 'No Math assessment data'}
           tooltip="Percentage of students with latest Math assessment at or above grade level (On/Above). Source: ILEARN & IXL."
         />
-        <KpiCard icon={<Users className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge="↘ ALERT" badgeColor="text-lgs-red bg-red-50" label="Active Caseload" value={loadingStats ? '...' : String(stats.activeCaseload)} sub={loadingStats ? '' : `${stats.tier3Count} students in Tier 3`} tooltip="Total number of active students in the system. Tier distribution excludes students with Pending tier status." />
+        <KpiCard icon={<Users className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge={stats.totalStudents > 0 && (stats.tier3Count / stats.totalStudents) < 0.3 ? '↗ ON TRACK' : '↘ ALERT'} badgeColor={stats.totalStudents > 0 && (stats.tier3Count / stats.totalStudents) < 0.3 ? 'text-green-600 bg-green-50' : 'text-lgs-red bg-red-50'} label="Active Caseload" value={loadingStats ? '...' : String(stats.activeCaseload)} sub={loadingStats ? '' : `${stats.tier3Count} students in Tier 3`} tooltip="Total number of active students in the system. Tier distribution excludes students with Pending tier status." />
         {/* Target Goal — editable */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
           <div className="flex justify-between items-start mb-4">
