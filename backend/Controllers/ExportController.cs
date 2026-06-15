@@ -18,6 +18,44 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
 
     /// <summary>
+    /// BRD DI-10: return unmatched STN rows as JSON for the in-app viewer.
+    /// </summary>
+    [HttpGet("unmatched-stns/list")]
+    public async Task<IActionResult> UnmatchedStnsList(CancellationToken ct)
+    {
+        var (students, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
+        var knownStns = students
+            .Where(s => !string.IsNullOrWhiteSpace(s.Stn))
+            .Select(s => s.Stn!.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var allAssessments = await cosmos.GetAllAssessmentsAsync();
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var rows = new List<object>();
+
+        foreach (var a in allAssessments)
+        {
+            var rawStn = a.RawFields
+                .Where(kv => kv.Key.Contains("STN", StringComparison.OrdinalIgnoreCase) ||
+                             kv.Key.Contains("State", StringComparison.OrdinalIgnoreCase) ||
+                             kv.Key.Contains("SSID", StringComparison.OrdinalIgnoreCase))
+                .Select(kv => kv.Value?.Trim())
+                .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+            if (string.IsNullOrWhiteSpace(rawStn)) continue;
+            if (knownStns.Contains(rawStn)) continue;
+
+            var key = $"{rawStn}|{a.FileName}";
+            if (!seen.Add(key)) continue;
+
+            rows.Add(new { stn = rawStn, uploadType = a.UploadType, fileName = a.FileName, uploadedAt = a.UploadedAt });
+        }
+
+        return Ok(new { total = rows.Count, rows = rows.OrderBy(r => ((dynamic)r).stn) });
+    }
+
+    /// <summary>
     /// BRD DI-10: diff assessment STNs against demographic STNs and return a CSV of unmatched rows.
     /// Rows = assessment records whose STN has no corresponding active student in the students container.
     /// </summary>
