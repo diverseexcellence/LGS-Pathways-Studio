@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X, ShieldAlert, Download, RefreshCw } from 'lucide-react';
-import { uploadApi, exportApi, ParseSummary, UploadLog } from '../lib/api';
+import { uploadApi, exportApi, unmatchedStnsApi, ParseSummary, UploadLog, UnmatchedStnRow } from '../lib/api';
 
 const UPLOAD_TYPES = [
   { value: 'demographics', label: 'PowerSchool Demographics' },
@@ -29,6 +29,10 @@ export default function DataIngestion() {
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [recalcStatus, setRecalcStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [stnExportStatus, setStnExportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [unmatchedRows, setUnmatchedRows] = useState<UnmatchedStnRow[] | null>(null);
+  const [unmatchedTotal, setUnmatchedTotal] = useState<number | null>(null);
+  const [loadingUnmatched, setLoadingUnmatched] = useState(false);
+  const [stnSearch, setStnSearch] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -167,6 +171,20 @@ export default function DataIngestion() {
       setStnExportStatus({ type: 'error', message: err.message || 'Export failed' });
     } finally {
       setIsExportingStns(false);
+    }
+  };
+
+  const handleLoadUnmatchedList = async () => {
+    setLoadingUnmatched(true);
+    try {
+      const result = await unmatchedStnsApi.list();
+      setUnmatchedRows(result.rows);
+      setUnmatchedTotal(result.total);
+      setStnSearch('');
+    } catch (err: any) {
+      setStnExportStatus({ type: 'error', message: err.message || 'Failed to load unmatched STNs' });
+    } finally {
+      setLoadingUnmatched(false);
     }
   };
 
@@ -386,26 +404,38 @@ export default function DataIngestion() {
         )}
       </div>
 
-      {/* Data Quality */}
+      {/* Data Quality — BRD DI-10 */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
         <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2 mb-1">
           <ShieldAlert className="w-5 h-5 text-lgs-red" />
           Data Quality
         </h2>
         <p className="text-sm text-slate-500 mb-4">
-          Download a report of assessment records whose STN does not match any enrolled student.
-          Use this to identify file mismatches or missing demographic uploads.
+          Assessment records whose STN does not match any enrolled student. Use this to identify
+          file mismatches or missing demographic uploads.
         </p>
-        <button
-          onClick={handleExportUnmatchedStns}
-          disabled={isExportingStns}
-          className="flex items-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors text-sm"
-        >
-          <Download className="w-4 h-4" />
-          {isExportingStns ? 'Generating report…' : 'Download Unmatched STN Report'}
-        </button>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <button
+            onClick={handleLoadUnmatchedList}
+            disabled={loadingUnmatched}
+            className="flex items-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors text-sm"
+          >
+            <ShieldAlert className="w-4 h-4" />
+            {loadingUnmatched ? 'Loading…' : unmatchedRows !== null ? 'Refresh' : 'View Unmatched STNs'}
+          </button>
+          {unmatchedRows !== null && unmatchedRows.length > 0 && (
+            <button
+              onClick={handleExportUnmatchedStns}
+              disabled={isExportingStns}
+              className="flex items-center gap-2 px-4 py-2.5 border border-slate-300 text-slate-700 rounded-lg font-medium hover:bg-slate-50 disabled:opacity-50 transition-colors text-sm"
+            >
+              <Download className="w-4 h-4" />
+              {isExportingStns ? 'Downloading…' : 'Download CSV'}
+            </button>
+          )}
+        </div>
         {stnExportStatus && (
-          <div className={`mt-3 p-3 rounded-lg flex items-center gap-2 text-sm ${
+          <div className={`mb-4 p-3 rounded-lg flex items-center gap-2 text-sm ${
             stnExportStatus.type === 'success'
               ? 'bg-green-50 text-green-800 border border-green-200'
               : 'bg-red-50 text-red-800 border border-red-200'
@@ -414,6 +444,71 @@ export default function DataIngestion() {
               ? <CheckCircle className="w-4 h-4 shrink-0" />
               : <AlertCircle className="w-4 h-4 shrink-0" />}
             {stnExportStatus.message}
+          </div>
+        )}
+        {unmatchedRows !== null && (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-medium text-slate-700">
+                {unmatchedTotal === 0
+                  ? 'No unmatched STNs found.'
+                  : `${unmatchedTotal} unmatched STN${unmatchedTotal !== 1 ? 's' : ''} across uploaded assessment files`}
+              </p>
+              {unmatchedRows.length > 0 && (
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Filter STN or file…"
+                    value={stnSearch}
+                    onChange={e => setStnSearch(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-lgs-blue outline-none w-52"
+                  />
+                </div>
+              )}
+            </div>
+            {unmatchedRows.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 text-slate-600 uppercase tracking-wide text-[11px]">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">STN</th>
+                      <th className="px-3 py-2 text-left font-semibold">Upload Type</th>
+                      <th className="px-3 py-2 text-left font-semibold">File Name</th>
+                      <th className="px-3 py-2 text-left font-semibold">Uploaded At</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {unmatchedRows
+                      .filter(r => {
+                        if (!stnSearch) return true;
+                        const q = stnSearch.toLowerCase();
+                        return r.stn.toLowerCase().includes(q) || r.fileName.toLowerCase().includes(q);
+                      })
+                      .slice(0, 200)
+                      .map((r, i) => (
+                        <tr key={i} className="hover:bg-slate-50">
+                          <td className="px-3 py-2 font-mono text-slate-800">{r.stn}</td>
+                          <td className="px-3 py-2 text-slate-600">{r.uploadType}</td>
+                          <td className="px-3 py-2 text-slate-500 break-all max-w-[200px]">{r.fileName}</td>
+                          <td className="px-3 py-2 text-slate-400 whitespace-nowrap">
+                            {new Date(r.uploadedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+                {unmatchedRows.filter(r => {
+                  if (!stnSearch) return true;
+                  const q = stnSearch.toLowerCase();
+                  return r.stn.toLowerCase().includes(q) || r.fileName.toLowerCase().includes(q);
+                }).length > 200 && (
+                  <p className="px-3 py-2 text-xs text-slate-400 border-t border-slate-100">
+                    Showing first 200 results. Download CSV for the full list.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

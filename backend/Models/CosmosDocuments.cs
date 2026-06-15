@@ -76,6 +76,9 @@ public class StudentDocument
     [JsonProperty("lunchStatus")]
     public string? LunchStatus { get; set; }
 
+    [JsonProperty("zipCode")]
+    public string? ZipCode { get; set; }
+
     [JsonProperty("sourceFile")]
     public string? SourceFile { get; set; }
 }

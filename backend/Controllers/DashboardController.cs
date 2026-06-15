@@ -233,6 +233,32 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         return Ok(result);
     }
 
+    // ─── Geographic Distribution (BRD DB-12) ─────────────────────────────────
+    // Returns tier counts grouped by ZIP code. No simulated socio-economic data.
+    // Coordinates are resolved client-side via OpenStreetMap Nominatim.
+
+    [HttpGet("geographic")]
+    public async Task<IActionResult> Geographic()
+    {
+        var (students, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
+
+        var grouped = students
+            .Where(s => !string.IsNullOrWhiteSpace(s.ZipCode))
+            .GroupBy(s => s.ZipCode!.Trim())
+            .Select(g => new
+            {
+                zip    = g.Key,
+                total  = g.Count(),
+                tier1  = g.Count(s => s.Tier == "Tier 1"),
+                tier2  = g.Count(s => s.Tier == "Tier 2"),
+                tier3  = g.Count(s => s.Tier == "Tier 3"),
+            })
+            .OrderByDescending(r => r.total)
+            .ToList();
+
+        return Ok(grouped);
+    }
+
     // ─── Grade-Level Proficiency (BRD DB-5) ──────────────────────────────────
     // Segments by actual assessment proficiency bands (Above/On/Approaching/Below),
     // NOT tier assignment.  Uses the most recent assessment per student per subject.

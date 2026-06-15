@@ -324,6 +324,9 @@ export interface DashboardKpis {
   elaStudentsWithGrowthData: number;
 }
 
+export interface GeoZipRow { zip: string; total: number; tier1: number; tier2: number; tier3: number }
+export interface UnmatchedStnRow { stn: string; uploadType: string; fileName: string; uploadedAt: string }
+
 export const dashboardApi = {
   getTargetGoal: () => request<{ goalPct: number; updatedAt: string; updatedBy: string | null }>('/api/dashboard/target-goal'),
   setTargetGoal: (goalPct: number) => request<{ goalPct: number }>('/api/dashboard/target-goal', { method: 'PUT', body: JSON.stringify({ goalPct }) }),
@@ -333,4 +336,9 @@ export const dashboardApi = {
   kpis: () => request<DashboardKpis>('/api/dashboard/kpis'),
   timeline: () => request<TimelinePoint[]>('/api/dashboard/timeline'),
   byGradeProficiency: () => request<GradeProficiencyRow[]>('/api/dashboard/by-grade-proficiency'),
+  geographic: () => request<GeoZipRow[]>('/api/dashboard/geographic'),
+};
+
+export const unmatchedStnsApi = {
+  list: () => request<{ total: number; rows: UnmatchedStnRow[] }>('/api/export/unmatched-stns/list'),
 };

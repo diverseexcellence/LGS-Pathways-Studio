@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TrendingUp, Award, Users, Target, Info, ChevronRight, ChevronLeft, Pencil, Check, X, Download } from 'lucide-react';
-import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis, GradeProficiencyRow } from '../lib/api';
+import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis, GradeProficiencyRow, GeoZipRow } from '../lib/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
   BarChart, Bar
 } from 'recharts';
-import { MapContainer, TileLayer } from 'react-leaflet';
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
 const defaultCenter: [number, number] = [39.7684, -86.1581];
@@ -148,6 +148,10 @@ export default function Dashboard() {
   // BRD DB-5: grade proficiency bands from actual assessment data
   const [gradeProficiencyData, setGradeProficiencyData] = useState<GradeProficiencyRow[]>([]);
 
+  // BRD DB-12: geographic distribution by ZIP (real data, no simulated socio-economic stats)
+  const [geoData, setGeoData] = useState<(GeoZipRow & { lat: number; lng: number })[]>([]);
+  const [geoLoading, setGeoLoading] = useState(false);
+
   useEffect(() => {
     async function fetchAll() {
       setLoadingStats(true);
@@ -219,12 +223,40 @@ export default function Dashboard() {
       }
     }
 
+    async function fetchGeographic() {
+      setGeoLoading(true);
+      try {
+        const rows = await dashboardApi.geographic();
+        if (rows.length === 0) { setGeoLoading(false); return; }
+        // Resolve ZIP codes to coordinates via Nominatim (OpenStreetMap)
+        const resolved: (GeoZipRow & { lat: number; lng: number })[] = [];
+        for (const row of rows) {
+          try {
+            const res = await fetch(
+              `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(row.zip)}&countrycodes=us&format=json&limit=1`,
+              { headers: { 'Accept-Language': 'en' } }
+            );
+            const hits = await res.json();
+            if (hits.length > 0) {
+              resolved.push({ ...row, lat: parseFloat(hits[0].lat), lng: parseFloat(hits[0].lon) });
+            }
+          } catch { /* skip unresolvable ZIP */ }
+        }
+        setGeoData(resolved);
+      } catch (e) {
+        console.error('Geographic fetch failed', e);
+      } finally {
+        setGeoLoading(false);
+      }
+    }
+
     fetchAll();
     fetchConfig();
     fetchGrades();
     fetchKpis();
     fetchTimeline();
     fetchGradeProficiency();
+    fetchGeographic();
   }, []);
 
   async function drillToTeachers(grade: string) {
@@ -641,7 +673,7 @@ export default function Dashboard() {
               <Target className="w-5 h-5 text-slate-400" />
               Geographic Distribution
             </h2>
-            <p className="text-sm text-slate-500 mt-1">Student tier distribution by location.</p>
+            <p className="text-sm text-slate-500 mt-1">Student tier distribution by ZIP code. Circle size reflects student count; color reflects tier mix.</p>
           </div>
           <div className="h-[400px] relative rounded-xl overflow-hidden border border-slate-200 z-0">
             <MapContainer center={defaultCenter} zoom={10} style={{ height: '100%', width: '100%' }}>
@@ -649,13 +681,55 @@ export default function Dashboard() {
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
+              {geoData.map(row => (
+                <CircleMarker
+                  key={row.zip}
+                  center={[row.lat, row.lng]}
+                  radius={Math.max(6, Math.min(30, row.total * 1.5))}
+                  pathOptions={{
+                    color: row.tier3 > row.tier1 ? '#b91c1c' : '#214965',
+                    fillColor: row.tier3 > row.tier1 ? '#b91c1c' : '#214965',
+                    fillOpacity: 0.6,
+                    weight: 1,
+                  }}
+                >
+                  <Popup>
+                    <div className="text-sm">
+                      <p className="font-semibold mb-1">ZIP: {row.zip}</p>
+                      <p>Total students: {row.total}</p>
+                      <p>Tier 1: {row.tier1} &nbsp; Tier 2: {row.tier2} &nbsp; Tier 3: {row.tier3}</p>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              ))}
+              {geoData.length > 0 && <GeoMapFitBounds data={geoData} />}
             </MapContainer>
           </div>
-          <p className="text-xs text-slate-400 mt-2 italic">Geographic data not available for this deployment.</p>
+          {geoLoading && (
+            <p className="text-xs text-slate-400 mt-2 italic">Resolving ZIP code coordinates…</p>
+          )}
+          {!geoLoading && geoData.length === 0 && (
+            <p className="text-xs text-slate-400 mt-2 italic">No ZIP code data available. Upload demographics files containing a Zip Code column to populate this map.</p>
+          )}
+          {!geoLoading && geoData.length > 0 && (
+            <p className="text-xs text-slate-400 mt-2">
+              {geoData.length} ZIP code{geoData.length !== 1 ? 's' : ''} · Coordinates via OpenStreetMap Nominatim
+            </p>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+function GeoMapFitBounds({ data }: { data: { lat: number; lng: number }[] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (data.length === 0) return;
+    const bounds = data.map(d => [d.lat, d.lng] as [number, number]);
+    map.fitBounds(bounds, { padding: [40, 40] });
+  }, [data, map]);
+  return null;
 }
 
 function KpiCard({ icon, iconBg, badge, badgeColor, label, value, sub, tooltip }: {

@@ -320,6 +320,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         existing.LunchStatus = GetVal(row, "LunchStatus", "Lunch Status", "Lunch_Status",
                                                       "Lunch Program", "Free/Reduced Lunch",
                                                       "STUDENTS.LunchStatus") ?? existing.LunchStatus;
+                        existing.ZipCode     = GetVal(row, "ZipCode", "Zip Code", "Zip", "ZIP",
+                                                      "Postal Code", "STUDENTS.Zip",
+                                                      "STUDENTS.Zip_Code") ?? existing.ZipCode;
                         existing.LastUpdated = DateTime.UtcNow.ToString("o");
                         await cosmos.MoveStudentPartitionAsync(existing, oldClassGroup);
                         imported++;
@@ -363,6 +366,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         LunchStatus = GetVal(row, "LunchStatus", "Lunch Status", "Lunch_Status",
                                             "Lunch Program", "Free/Reduced Lunch",
                                             "STUDENTS.LunchStatus"),
+                        ZipCode     = GetVal(row, "ZipCode", "Zip Code", "Zip", "ZIP",
+                                            "Postal Code", "STUDENTS.Zip",
+                                            "STUDENTS.Zip_Code"),
                         SourceFile = fileName,
                         Tier       = "Pending",
                         TierStatus = "Pending",
