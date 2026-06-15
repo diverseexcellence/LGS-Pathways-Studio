@@ -63,6 +63,10 @@ public interface ICosmosDbService
     Task<TargetGoalDocument> GetTargetGoalAsync();
     Task UpsertTargetGoalAsync(TargetGoalDocument doc);
 
+    // Tier Ruleset config
+    Task<TierRulesetConfigDocument> GetTierRulesetConfigAsync();
+    Task UpsertTierRulesetConfigAsync(TierRulesetConfigDocument doc);
+
     // Seed admins if container is empty
     Task SeedAdminsIfEmptyAsync();
 }
@@ -634,6 +638,19 @@ public class CosmosDbService : ICosmosDbService
     }
 
     public async Task UpsertTargetGoalAsync(TargetGoalDocument doc)
+        => await Config.UpsertItemAsync(doc, new PartitionKey(doc.PartitionKey));
+
+    public async Task<TierRulesetConfigDocument> GetTierRulesetConfigAsync()
+    {
+        try
+        {
+            var resp = await Config.ReadItemAsync<TierRulesetConfigDocument>("tier-ruleset", new PartitionKey("config"));
+            return resp.Resource;
+        }
+        catch (CosmosException) { return new TierRulesetConfigDocument(); }
+    }
+
+    public async Task UpsertTierRulesetConfigAsync(TierRulesetConfigDocument doc)
         => await Config.UpsertItemAsync(doc, new PartitionKey(doc.PartitionKey));
 
     // ─── Ensure containers exists ─────────────────────────────────────────────

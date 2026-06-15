@@ -376,12 +376,23 @@ export default function StudentProfile() {
           </div>
 
           {/* Tier badge */}
-          <div className="shrink-0">
+          <div className="shrink-0 text-right">
             <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border ${tierColor}`}>
               {student.tier || 'Pending'}
             </span>
             {student.tierStatus && (
-              <p className="text-xs text-slate-400 text-right mt-1">{student.tierStatus}</p>
+              <p className="text-xs text-slate-400 mt-1">{student.tierStatus}</p>
+            )}
+            {student.tierStatus === 'Pending' && student.tierPendingReason && (
+              <p className="text-xs text-amber-600 mt-0.5 max-w-[180px]">
+                {student.tierPendingReason === 'no_assessments'
+                  ? 'No assessment data uploaded yet.'
+                  : student.tierPendingReason === 'no_proficiency_or_percentile'
+                  ? 'Assessment data present but no proficiency label or percentile found.'
+                  : student.tierPendingReason === 'insufficient_subjects'
+                  ? 'Reading data only — ELA and Math required for Grade 3+.'
+                  : student.tierPendingReason}
+              </p>
             )}
           </div>
         </div>
