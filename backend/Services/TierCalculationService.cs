@@ -26,6 +26,9 @@ public class TierCalculationService(
         var assessments = await cosmos.GetAssessmentsAsync(student.StudentId);
         var result = Compute(student, assessments);
 
+        // Load ruleset version for audit entry (BRD Task 8)
+        var ruleset = await cosmos.GetTierRulesetConfigAsync();
+
         // Only update if we produced a recommendation (not Pending)
         if (result.TierStatus == TierStatus.SystemRecommended)
         {
@@ -41,14 +44,14 @@ public class TierCalculationService(
             await audit.LogAsync(
                 adminId:    systemAdminId,
                 adminEmail: systemAdminEmail,
-                eventType:  AuditEventType.Edit,
+                eventType:  AuditEventType.TierRecommendation,
                 entityType: "Student",
                 entityId:   student.StudentId,
-                details:    $"System tier recommendation: {result.Tier} | {result.Reasoning} | Prior: {priorTier}/{priorTierStatus}");
+                details:    $"System Tier Recommendation Generated — {student.FullName}: {result.Tier} | {result.Reasoning} | Prior: {priorTier}/{priorTierStatus} | Ruleset v{ruleset.RulesetVersion}");
         }
         else if (result.TierStatus == TierStatus.Pending && student.TierStatus != TierStatus.Finalized)
         {
-            // Keep as Pending but record why (insufficient data) — BRD G8
+            // Keep as Pending but record why (insufficient data) — BRD Task 4
             student.TierStatus        = TierStatus.Pending;
             student.TierPendingReason = result.PendingReason;
             student.LastUpdated       = DateTime.UtcNow.ToString("o");

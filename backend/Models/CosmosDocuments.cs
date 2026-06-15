@@ -288,6 +288,35 @@ public class TargetGoalDocument
     public string? UpdatedBy { get; set; }
 }
 
+public class TierRulesetConfigDocument
+{
+    [JsonProperty("id")]
+    public string Id { get; set; } = "tier-ruleset";
+
+    [JsonProperty("partitionKey")]
+    public string PartitionKey { get; set; } = "config";
+
+    [JsonProperty("rulesetVersion")]
+    public string RulesetVersion { get; set; } = "1.0";
+
+    [JsonProperty("percentileCutoff")]
+    public int PercentileCutoff { get; set; } = 40;
+
+    [JsonProperty("effectiveDate")]
+    public string EffectiveDate { get; set; } = "2026-06-12";
+
+    [JsonProperty("description")]
+    public string Description { get; set; } =
+        "Tier 1 = On/Above in both ELA and Math. Tier 2 = mixed. Tier 3 = Below in both. " +
+        "Percentile cutoff: ≥40 = On/Above. K–2: Reading proxies missing ELA/Math signals.";
+
+    [JsonProperty("updatedAt")]
+    public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
+
+    [JsonProperty("updatedBy")]
+    public string? UpdatedBy { get; set; }
+}
+
 public class CollaborationNoteDocument
 {
     [JsonProperty("id")]
