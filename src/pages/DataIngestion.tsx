@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, CloudDownload, Search, X, ShieldAlert, Download, RefreshCw } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, Search, X, ShieldAlert, Download, RefreshCw } from 'lucide-react';
 import { uploadApi, exportApi, unmatchedStnsApi, ParseSummary, UploadLog, UnmatchedStnRow } from '../lib/api';
 
 const UPLOAD_TYPES = [
@@ -324,20 +324,6 @@ export default function DataIngestion() {
           {isUploading ? 'Uploading & Parsing…' : 'Upload Data'}
         </button>
 
-        <div className="relative flex items-center gap-3 py-2">
-          <div className="flex-1 border-t border-slate-200" />
-          <span className="text-xs text-slate-400 font-medium uppercase tracking-wide">or</span>
-          <div className="flex-1 border-t border-slate-200" />
-        </div>
-
-        <button
-          onClick={handleImportLandingZone}
-          disabled={isImporting}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-lgs-blue text-white rounded-lg font-medium hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
-        >
-          <CloudDownload className="w-5 h-5" />
-          {isImporting ? 'Importing from Landing Zone…' : 'Import from Landing Zone'}
-        </button>
 
         {isRecalculating && (
           <div className="p-3 rounded-lg text-sm border flex items-center gap-2 bg-slate-50 text-slate-600 border-slate-200">
