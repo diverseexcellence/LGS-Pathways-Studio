@@ -112,6 +112,18 @@ export default function DataIngestion() {
     setFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = '';
     await fetchLogs();
+
+    // Auto-recalculate tiers after every upload
+    try {
+      setIsRecalculating(true);
+      const res = await uploadApi.recalculateTiers();
+      setRecalcStatus({ type: 'success', message: res.message });
+    } catch {
+      setRecalcStatus({ type: 'error', message: 'Tier recalculation failed after upload.' });
+    } finally {
+      setIsRecalculating(false);
+    }
+
     setIsUploading(false);
   };
 
@@ -140,6 +152,17 @@ export default function DataIngestion() {
       const total = res.results.reduce((sum, r) => sum + (r.result?.importedRows ?? 0), 0);
       setStatus({ type: 'success', message: `${res.message} ${total} record(s) imported.` });
       await fetchLogs();
+
+      // Auto-recalculate tiers after landing zone import
+      try {
+        setIsRecalculating(true);
+        const recalc = await uploadApi.recalculateTiers();
+        setRecalcStatus({ type: 'success', message: recalc.message });
+      } catch {
+        setRecalcStatus({ type: 'error', message: 'Tier recalculation failed after import.' });
+      } finally {
+        setIsRecalculating(false);
+      }
     } catch (err: any) {
       setStatus({ type: 'error', message: err.message || 'Import failed' });
     } finally {
@@ -147,19 +170,6 @@ export default function DataIngestion() {
     }
   };
 
-
-  const handleRecalculateTiers = async () => {
-    setIsRecalculating(true);
-    setRecalcStatus(null);
-    try {
-      const res = await uploadApi.recalculateTiers();
-      setRecalcStatus({ type: 'success', message: res.message });
-    } catch (err: any) {
-      setRecalcStatus({ type: 'error', message: err.message || 'Recalculation failed.' });
-    } finally {
-      setIsRecalculating(false);
-    }
-  };
 
   const handleExportUnmatchedStns = async () => {
     setIsExportingStns(true);
@@ -329,20 +339,16 @@ export default function DataIngestion() {
           {isImporting ? 'Importing from Landing Zone…' : 'Import from Landing Zone'}
         </button>
 
-        <button
-          onClick={handleRecalculateTiers}
-          disabled={isRecalculating}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-700 text-white rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw className={`w-5 h-5 ${isRecalculating ? 'animate-spin' : ''}`} />
-          {isRecalculating ? 'Recalculating Tiers…' : 'Recalculate All Tiers'}
-        </button>
-
-
-        {recalcStatus && (
+        {isRecalculating && (
+          <div className="p-3 rounded-lg text-sm border flex items-center gap-2 bg-slate-50 text-slate-600 border-slate-200">
+            <RefreshCw className="w-4 h-4 shrink-0 animate-spin" />
+            Recalculating tiers…
+          </div>
+        )}
+        {!isRecalculating && recalcStatus && (
           <div className={`p-3 rounded-lg text-sm border flex items-center gap-2 ${recalcStatus.type === 'success' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
             {recalcStatus.type === 'success' ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-            {recalcStatus.message}
+            Tiers recalculated: {recalcStatus.message}
           </div>
         )}
 
