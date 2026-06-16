@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, Student, Assessment, AISummary, AuditEntry, CollaborationNote } from '../lib/api';
 
@@ -14,7 +14,7 @@ const AUDIT_EVENT_LABELS: Record<string, string> = {
   Login: 'Login',
   Error: 'System Error',
 };
-import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, FileJson, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X, Sparkles } from 'lucide-react';
+import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X, Sparkles } from 'lucide-react';
 
 const MTSS_STRATEGIES: Record<string, string[]> = {
   "Tier 1": [
@@ -138,6 +138,7 @@ function calculateAge(dob: string) {
 
 export default function StudentProfile() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { user } = useAuth();
 
   const [student, setStudent] = useState<Student | null>(null);
@@ -341,6 +342,14 @@ export default function StudentProfile() {
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
 
+      {/* Back link */}
+      <button
+        onClick={() => navigate('/students')}
+        className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-lgs-blue transition-colors"
+      >
+        ← Back to Students List
+      </button>
+
       {/* ── Hero Card ─────────────────────────────────────────────────────── */}
       <div className={`bg-white rounded-xl shadow-sm border border-slate-200 border-t-4 ${tierAccent} overflow-hidden`}>
         {/* Top bar: name + tier badge */}
@@ -489,8 +498,8 @@ export default function StudentProfile() {
                             }`}>{d.proficiency}</span>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <button onClick={() => setSelectedAssessment(a)} className="text-lgs-blue hover:text-lgs-blue-dark p-1 rounded hover:bg-slate-100 transition-colors" title="View Details">
-                              <FileJson className="w-4 h-4" />
+                            <button onClick={() => setSelectedAssessment(a)} className="text-lgs-blue hover:underline text-xs font-medium" title="View Details">
+                              Details
                             </button>
                           </td>
                         </tr>
@@ -708,33 +717,105 @@ export default function StudentProfile() {
       {/* Demographics Modal */}
       {showDemographics && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg max-w-lg w-full p-6">
-            <h3 className="text-lg font-bold text-slate-900 mb-4">Student Demographics</h3>
-            <div className="space-y-3 text-sm">
-              {[
-                ['Full Name', formatDisplayName(student.fullName)],
-                ['STN', student.stn || 'N/A'],
-                ['Date of Birth', student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A'],
-                ['Age', String(calculateAge(student.dob))],
-                ['Grade', student.grade || 'N/A'],
-                ['Class Group', student.classGroup || 'N/A'],
-                ['Homeroom', student.homeRoom || 'N/A'],
-                ['Gender', student.gender || 'N/A'],
-                ['Ethnicity', translateEthnicity(student.ethnicity)],
-                ['EL Status', toYesNo(student.ellStatus)],
-                ['Special Education', toYesNo(student.spedStatus)],
-                ['504 Status', toYesNo(student.section504, 'No')],
-                ['Lunch Status', student.lunchStatus || 'N/A'],
-                ['Entry Date', student.entryDate ? new Date(student.entryDate).toLocaleDateString() : 'N/A'],
-                ['Exit Date', student.exitDate ? new Date(student.exitDate).toLocaleDateString() : 'N/A'],
-                ['Enrolled', student.enrolDate ? new Date(student.enrolDate).toLocaleDateString() : 'N/A'],
-                ['Source File', student.fileName || 'Unknown'],
-              ].map(([label, value]) => (
-                <div key={label} className="grid grid-cols-3 border-b border-slate-100 pb-2">
-                  <span className="text-slate-500 font-medium">{label}</span>
-                  <span className="col-span-2 text-slate-900">{value}</span>
+          <div className="bg-white rounded-xl shadow-lg max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-bold text-slate-900 mb-5">Full Demographics</h3>
+            <div className="space-y-5 text-sm">
+
+              {/* Student Identity */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Student Identity</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  {[
+                    ['Full Name', formatDisplayName(student.fullName)],
+                    ['STN', student.stn || 'N/A'],
+                    ['Date of Birth', student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A'],
+                    ['Age', String(calculateAge(student.dob))],
+                    ['Gender', student.gender || 'N/A'],
+                    ['Ethnicity', translateEthnicity(student.ethnicity)],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
+                      <span className="text-slate-900">{value}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+
+              <div className="border-t border-slate-100" />
+
+              {/* Enrollment Information */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Enrollment Information</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  {[
+                    ['Grade', student.grade || 'N/A'],
+                    ['Class Group', student.classGroup || 'N/A'],
+                    ['Homeroom', student.homeRoom || 'N/A'],
+                    ['Entry Date', student.entryDate ? new Date(student.entryDate).toLocaleDateString() : 'N/A'],
+                    ['Exit Date', student.exitDate ? new Date(student.exitDate).toLocaleDateString() : 'N/A'],
+                    ['Enrolled', student.enrolDate ? new Date(student.enrolDate).toLocaleDateString() : 'N/A'],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
+                      <span className="text-slate-900">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100" />
+
+              {/* Program & Support Indicators */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Program & Support Indicators</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  {[
+                    ['Special Education', toYesNo(student.spedStatus)],
+                    ['504 Plan', toYesNo(student.section504, 'No')],
+                    ['Lunch Status', student.lunchStatus || 'N/A'],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
+                      <span className="text-slate-900">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100" />
+
+              {/* EL / Language Details */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">EL / Language Details</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  {[
+                    ['EL Status', toYesNo(student.ellStatus)],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
+                      <span className="text-slate-900">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100" />
+
+              {/* Source Reference */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Source Reference</p>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  {[
+                    ['Source File', student.fileName || 'Unknown'],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
+                      <span className="text-slate-900 font-mono text-xs break-all">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
             </div>
             <div className="mt-6 flex justify-end">
               <button onClick={() => setShowDemographics(false)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">
@@ -747,29 +828,6 @@ export default function StudentProfile() {
 
       {/* G5 – Enriched Assessment Details Modal */}
       {selectedAssessment && (() => {
-        const raw = selectedAssessment.rawFields ?? {};
-        const SECTION_KEYS: Record<string, string[]> = {
-          'Assessment Summary':   ['assessment name', 'test name', 'assessment', 'form', 'grade', 'period', 'date', 'school year'],
-          'Overall Result':       ['score', 'total score', 'scale score', 'raw score', 'proficiency', 'overall', 'result', 'passed'],
-          'Performance Levels':   ['level', 'performance level', 'achievement level', 'band', 'tier'],
-          'Category Performance': ['category', 'strand', 'domain', 'standard', 'skill', 'reading', 'writing', 'math', 'science'],
-          'Key Observation':      ['observation', 'note', 'comment', 'flag', 'status'],
-          'Source Reference':     ['file', 'source', 'upload', 'id', 'record'],
-        };
-        function assignSection(key: string) {
-          const lk = key.toLowerCase();
-          for (const [section, keywords] of Object.entries(SECTION_KEYS)) {
-            if (keywords.some(kw => lk.includes(kw))) return section;
-          }
-          return 'Other';
-        }
-        const grouped: Record<string, [string, string][]> = {};
-        for (const [k, v] of Object.entries(raw)) {
-          const sec = assignSection(k);
-          if (!grouped[sec]) grouped[sec] = [];
-          grouped[sec].push([k, v]);
-        }
-        const sectionOrder = [...Object.keys(SECTION_KEYS), 'Other'];
         return (
           <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -797,24 +855,6 @@ export default function StudentProfile() {
                 ))}
               </div>
 
-              {/* Raw fields grouped by section */}
-              {Object.keys(raw).length > 0 && (
-                <div className="space-y-4">
-                  {sectionOrder.filter(sec => grouped[sec]?.length).map(sec => (
-                    <div key={sec}>
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{sec}</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {grouped[sec].map(([k, v]) => (
-                          <div key={k} className="bg-slate-50 rounded p-2 border border-slate-100 text-xs">
-                            <span className="block text-slate-400 font-medium truncate" title={k}>{k}</span>
-                            <span className="text-slate-800 break-words">{v}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
 
               <div className="mt-6 flex justify-end">
                 <button onClick={() => setSelectedAssessment(null)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">

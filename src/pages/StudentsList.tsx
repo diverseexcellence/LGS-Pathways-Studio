@@ -41,12 +41,16 @@ export default function StudentsList() {
       minWidth: 160,
     },
     {
-      field: 'classGroup',
-      headerName: 'Class',
+      field: 'stn',
+      headerName: 'STN',
       sortable: true,
       filter: true,
       flex: 1,
-      minWidth: 100,
+      minWidth: 110,
+      cellRenderer: (params: any) =>
+        params.value
+          ? <span className="font-mono text-xs text-slate-700">{params.value}</span>
+          : <span className="text-slate-300 text-xs">—</span>,
     },
     {
       field: 'grade',
