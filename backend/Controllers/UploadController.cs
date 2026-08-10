@@ -174,7 +174,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         var n = fileName.ToUpperInvariant();
         if (n.StartsWith("TEST_")) return "__SKIP__";
         if (n.Contains("ILEARN") || n.Contains("CHECKPOINT")) return "ILEARN";
-        if (n.Contains("IXL")) return "IXL";
+        // "LevelUp" is IXL's product name — newer benchmark exports drop "IXL" from the filename
+        // (e.g. "LevelUp-Diagnostic-Results-EOY-Math-LevelUp-Benchmark-By-Student-2026-06-19.csv").
+        if (n.Contains("IXL") || n.Contains("LEVELUP") || n.Contains("LEVEL-UP")) return "IXL";
         if (n.Contains("ACADIENCE")) return "Acadience";
         if (n.Contains("IREAD") || n.Contains("I-READ")) return "IREAD";
         if (n.Contains("ALO") || n.Contains("READING_PM") || n.Contains("READING-PM")) return "Acadience";
@@ -389,9 +391,18 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                                          "Local ID", "Local Student ID", "School ID",
                                          "Local Student Number");
 
-                    // IXL LevelUp exports use "ID" column which is actually the STN (state student number)
+                    // IXL exports are inconsistent: the Feb-2026 Diagnostic format puts a real STN in the
+                    // "ID" column, while the Jul-2026 format puts IXL's own 7-digit internal ID there.
+                    // Per BRD v1.2 DI-12, "ID" is only treated as an STN when the value has the shape of
+                    // one. A non-STN value is deliberately NOT kept as a local id — IXL's internal id is
+                    // not a school identifier and could collide with a real PowerSchool Student_Number in
+                    // the local-id lookup below, attaching the row to the wrong student. Leaving it unset
+                    // makes matching fall through to the name lookup instead.
                     if (string.IsNullOrWhiteSpace(stn) && uploadType == "IXL")
-                        stn = GetVal(row, "ID");
+                    {
+                        var idVal = GetVal(row, "ID");
+                        if (LooksLikeStn(idVal)) stn = idVal;
+                    }
                     else if (string.IsNullOrWhiteSpace(localId))
                         localId = GetVal(row, "ID");
 
@@ -576,6 +587,18 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         return periodCol;
     }
 
+    // Indiana STNs are 9 characters: either all digits, or a single letter prefix followed by
+    // 8 digits (T/N/C/E prefixes observed in LGS files). IXL's internal student IDs are 7 digits
+    // and must not be mistaken for an STN — see BRD v1.2 DI-12.
+    private static bool LooksLikeStn(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var v = value.Trim();
+        if (v.Length != 9) return false;
+        if (v.All(char.IsDigit)) return true;
+        return char.IsLetter(v[0]) && v.Skip(1).All(char.IsDigit);
+    }
+
     private static string? GetVal(Dictionary<string, string> row, params string[] keys)
     {
         foreach (var key in keys)
@@ -673,7 +696,8 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             ["Score", "Scale Score", "Performance Level", "Achievement Level"],
         ],
         ["IXL"] = [
-            ["Student_Number", "ID", "Local ID", "Local Student Number"],
+            // LevelUp Benchmark exports carry a real STN column; older Diagnostic exports use "ID".
+            ["Student_Number", "ID", "Local ID", "Local Student Number", "STN", "State_StudentNumber"],
             ["SmartScore", "Score", "Diagnostic level", "Overall math score", "Overall ELA score", "Overall math tier", "Overall ELA tier"],
         ],
         ["Acadience"] = [
@@ -692,7 +716,11 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     {
         ["demographics"] = ["Grade_Level", "Home_Room", "STUDENTS.DOB", "Ethnicity", "ELL", "LunchStatus", "STUDENTS.Student_Number"],
         ["ILEARN"] = ["Scale Score", "Achievement Level", "ILEARN Student ID", "Performance Level"],
-        ["IXL"] = ["SmartScore", "Diagnostic level", "Date of completion"],
+        // "Date of completion" alone tied with demographics/ILEARN on LevelUp Benchmark files and lost
+        // the tie-break, so the IXL-only "Overall <subject> tier/scale score" columns are included too.
+        // Entries are matched against column headers, not the filename — see DetectUploadType for that.
+        ["IXL"] = ["SmartScore", "Diagnostic level", "Date of completion",
+                   "Overall math tier", "Overall ELA tier", "Overall math scale score", "Overall reading scale score"],
         ["Acadience"] = ["Reading Composite Score", "Reading Composite Status", "Reading Composite Date", "ALO"],
         ["IREAD"] = ["I-Read", "IREAD", "Did Not Pass", "Passed", "Reading Grade Level"],
     };
