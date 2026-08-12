@@ -43,10 +43,16 @@ function getAssessmentDisplayData(a: Assessment) {
   const subject = normalizeSubject(a.subject || 'Mixed');
   const proficiency = normalizeProficiency(a.proficiency || 'N/A');
   const formattedDate = formatDate(a.date ?? '');
+  // Kept alongside the display string so sorting compares actual dates, not the
+  // locale-formatted text — different sources (Acadience "22/8/2025" vs IXL
+  // "(11/13/2025)") don't share a display format, so string/native-Date sort
+  // on formattedDate silently breaks. See QA issue #9.
+  const dateValue = parseFlexibleDate(a.date ?? '');
 
   return {
     type: a.uploadType || 'Assessment',
     formattedDate,
+    dateValue,
     subject,
     proficiency,
     score: a.score != null ? String(a.score) : '',
@@ -82,11 +88,30 @@ function normalizeProficiency(p: string) {
   return p;
 }
 
+// Parses date strings from mixed assessment sources into a timestamp.
+// Source formats seen: IXL "(11/13/2025)" (US, month-first), Acadience
+// "22/8/2025" (day-first — 22 can't be a month, so this disambiguates
+// reliably whenever the first segment exceeds 12).
+function parseFlexibleDate(d: string): number {
+  const cleaned = (d || '').trim().replace(/^\(|\)$/g, '');
+  if (!cleaned) return NaN;
+
+  const parts = cleaned.split(/[/\-]/).map(p => p.trim());
+  if (parts.length === 3 && parts.every(p => /^\d+$/.test(p))) {
+    const [a, b, y] = parts.map(Number);
+    const year = y < 100 ? 2000 + y : y;
+    const [month, day] = a > 12 ? [b, a] : [a, b];
+    const ts = new Date(year, month - 1, day).getTime();
+    if (!isNaN(ts)) return ts;
+  }
+
+  const native = new Date(cleaned).getTime();
+  return isNaN(native) ? NaN : native;
+}
+
 function formatDate(d: string) {
-  try {
-    const parsed = new Date(d);
-    if (!isNaN(parsed.getTime())) return parsed.toLocaleDateString();
-  } catch {}
+  const ts = parseFlexibleDate(d);
+  if (!isNaN(ts)) return new Date(ts).toLocaleDateString();
   return d || 'N/A';
 }
 
@@ -289,8 +314,10 @@ export default function StudentProfile() {
         av = parseFloat(av) || 0;
         bv = parseFloat(bv) || 0;
       } else if (assessmentSortConfig.key === 'formattedDate') {
-        av = new Date(av).getTime() || 0;
-        bv = new Date(bv).getTime() || 0;
+        av = a.displayData.dateValue;
+        bv = b.displayData.dateValue;
+        av = isNaN(av) ? -Infinity : av;
+        bv = isNaN(bv) ? -Infinity : bv;
       }
       return av < bv
         ? assessmentSortConfig.direction === 'asc' ? -1 : 1

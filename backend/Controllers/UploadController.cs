@@ -325,6 +325,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         existing.ZipCode     = GetVal(row, "ZipCode", "Zip Code", "Zip", "ZIP",
                                                       "Postal Code", "STUDENTS.Zip",
                                                       "STUDENTS.Zip_Code") ?? existing.ZipCode;
+                        // Track the most recent file that supplied demographic data, not just
+                        // whichever upload originally created the record — see QA issue #11.
+                        existing.SourceFile  = fileName;
                         existing.LastUpdated = DateTime.UtcNow.ToString("o");
                         await cosmos.MoveStudentPartitionAsync(existing, oldClassGroup);
                         imported++;

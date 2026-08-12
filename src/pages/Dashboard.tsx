@@ -519,6 +519,9 @@ export default function Dashboard() {
               {drillView.level === 'teachers' && `Grade ${(drillView as any).grade} — By Teacher`}
               {drillView.level === 'students' && `Grade ${(drillView as any).grade} — Students`}
             </h2>
+            {/* Counts here reflect Finalized-tier students only, per BRD DB-4 — distinct from the
+                Active Caseload KPI above, which counts all active students regardless of tier status. */}
+            <p className="text-xs text-slate-400 -mt-0.5 mb-1">Finalized students only</p>
             {/* Breadcrumb */}
             <p className="text-sm text-slate-500 flex items-center gap-1 mt-0.5">
               <span

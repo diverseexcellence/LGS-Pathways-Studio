@@ -12,7 +12,7 @@ public interface ICosmosDbService
 
     // Students
     Task<StudentDocument?> GetStudentAsync(string studentId);
-    Task<(List<StudentDocument> Items, int Total)> ListStudentsAsync(int page, int pageSize, string? search, string? classGroup, bool activeOnly = true);
+    Task<(List<StudentDocument> Items, int Total)> ListStudentsAsync(int page, int pageSize, string? search, string? classGroup, bool activeOnly = true, string? sortBy = null, string? sortDir = null);
     Task UpsertStudentAsync(StudentDocument student);
     Task MoveStudentPartitionAsync(StudentDocument student, string oldClassGroup);
     Task<StudentDocument?> FindStudentByNameAndDobAsync(string fullName, string dob);
@@ -141,7 +141,8 @@ public class CosmosDbService : ICosmosDbService
     }
 
     public async Task<(List<StudentDocument> Items, int Total)> ListStudentsAsync(
-        int page, int pageSize, string? search, string? classGroup, bool activeOnly = true)
+        int page, int pageSize, string? search, string? classGroup, bool activeOnly = true,
+        string? sortBy = null, string? sortDir = null)
     {
         var queryable = Students.GetItemLinqQueryable<StudentDocument>().AsQueryable();
 
@@ -167,7 +168,20 @@ public class CosmosDbService : ICosmosDbService
                 .ToList();
         }
 
-        allItems = allItems.OrderBy(s => s.FullName).ToList();
+        var descending = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
+        Func<StudentDocument, object?> keySelector = (sortBy?.ToLowerInvariant()) switch
+        {
+            "stn" => s => s.Stn,
+            "grade" => s => s.Grade,
+            "tier" => s => s.Tier,
+            "isactive" => s => s.IsActive,
+            "classgroup" => s => s.ClassGroup,
+            _ => s => s.FullName,
+        };
+        allItems = (descending
+            ? allItems.OrderByDescending(keySelector, Comparer<object?>.Create((a, b) => Comparer<string>.Default.Compare(a?.ToString(), b?.ToString())))
+            : allItems.OrderBy(keySelector, Comparer<object?>.Create((a, b) => Comparer<string>.Default.Compare(a?.ToString(), b?.ToString()))))
+            .ToList();
         var total = allItems.Count;
         var items = allItems.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 

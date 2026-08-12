@@ -19,10 +19,12 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         [FromQuery] string? search = null,
-        [FromQuery] string? classGroup = null)
+        [FromQuery] string? classGroup = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDir = null)
     {
         pageSize = Math.Min(pageSize, 500);
-        var (items, total) = await cosmos.ListStudentsAsync(page, pageSize, search, classGroup);
+        var (items, total) = await cosmos.ListStudentsAsync(page, pageSize, search, classGroup, sortBy: sortBy, sortDir: sortDir);
 
         await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
             AuditEventType.View, entityType: "StudentList",
