@@ -122,9 +122,41 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                 }
 
                 List<Dictionary<string, string>> rows;
-                var formFile = new StreamFormFile(stream, name,
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer, ct);
+                var formFile = new StreamFormFile(buffer.ToArray(), name,
                     ext == ".csv" ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+                // This path previously ran no duplicate, schema or type checks at all — so every
+                // invocation re-imported every file in the container, multiplying assessment rows.
+                // It now applies the same three guards as the manual upload endpoint.
+                var contentHash = ComputeSha256(formFile);
+                var existingLog = await cosmos.FindUploadLogByHashAsync(contentHash);
+                if (existingLog is not null)
+                {
+                    results.Add(new { file = name, uploadType = "duplicate", result = (object?)null,
+                                      error = $"Already imported on {existingLog.UploadedAt} as \"{existingLog.FileName}\"." });
+                    continue;
+                }
+
                 rows = ext == ".csv" ? await ParseCsvAsync(formFile, ct) : ParseXlsx(formFile);
+
+                var headers = rows.Count > 0 ? rows[0].Keys.ToList() : new List<string>();
+                var schemaError = ValidateSchema(headers, uploadType);
+                if (schemaError is not null)
+                {
+                    results.Add(new { file = name, uploadType, result = (object?)null,
+                                      error = $"CSV schema error for \"{uploadType}\": {schemaError}" });
+                    continue;
+                }
+
+                var detectedType = DetectTypeFromColumns(headers);
+                if (detectedType is not null && !detectedType.Equals(uploadType, StringComparison.OrdinalIgnoreCase))
+                {
+                    results.Add(new { file = name, uploadType, result = (object?)null,
+                                      error = $"File-type mismatch: appears to be \"{detectedType}\" data but was detected as \"{uploadType}\" from the filename." });
+                    continue;
+                }
 
                 var result = await ProcessRowsAsync(rows, uploadType, name, ct);
 
@@ -137,6 +169,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     UploadedAt   = DateTime.UtcNow.ToString("o"),
                     RecordCount  = result.ImportedRows,
                     SkippedCount = result.SkippedRows,
+                    ContentHash  = contentHash,
                     Errors       = result.Errors
                 });
 
@@ -185,13 +218,17 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
     private sealed class StreamFormFile : IFormFile
     {
-        private readonly Stream _stream;
+        // Buffers the content rather than wrapping the source stream directly. The landing-zone
+        // flow now reads each file twice (once to hash, once to parse), and ComputeSha256 disposes
+        // the stream it is handed — so OpenReadStream must hand out an independent, rewound reader
+        // each time rather than the single forward-only blob stream.
+        private readonly byte[] _content;
         private readonly string _fileName;
         private readonly string _contentType;
 
-        public StreamFormFile(Stream stream, string fileName, string contentType)
+        public StreamFormFile(byte[] content, string fileName, string contentType)
         {
-            _stream = stream;
+            _content = content;
             _fileName = fileName;
             _contentType = contentType;
         }
@@ -199,12 +236,12 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         public string ContentType => _contentType;
         public string ContentDisposition => $"form-data; name=\"file\"; filename=\"{_fileName}\"";
         public IHeaderDictionary Headers => new HeaderDictionary();
-        public long Length => _stream.Length;
+        public long Length => _content.Length;
         public string Name => "file";
         public string FileName => _fileName;
-        public void CopyTo(Stream target) => _stream.CopyTo(target);
-        public Task CopyToAsync(Stream target, CancellationToken ct = default) => _stream.CopyToAsync(target, ct);
-        public Stream OpenReadStream() => _stream;
+        public void CopyTo(Stream target) => target.Write(_content, 0, _content.Length);
+        public Task CopyToAsync(Stream target, CancellationToken ct = default) => target.WriteAsync(_content, ct).AsTask();
+        public Stream OpenReadStream() => new MemoryStream(_content, writable: false);
     }
 
     [HttpPost("recalculate-tiers")]
@@ -244,8 +281,15 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     private async Task<ParseSummaryDto> ProcessRowsAsync(
         List<Dictionary<string, string>> rows, string uploadType, string fileName, CancellationToken ct)
     {
-        int imported = 0, skipped = 0;
+        int imported = 0, skipped = 0, duplicateAssessments = 0;
         var errors = new List<string>();
+
+        // Signatures of assessments already recorded for each student, loaded lazily on first
+        // sight of that student and updated as we go. Guards against the same test event being
+        // stored twice — whether from re-importing a file (the landing-zone path had no
+        // duplicate protection at all) or from the client's overlapping exports, where one
+        // result legitimately appears in both a subject-specific and a combined "Results" file.
+        var seenAssessments = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
         foreach (var row in rows)
         {
@@ -471,7 +515,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     double.TryParse(scoreRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var score);
 
                     var subject = GetVal(row, "Subject", "Content Area", "Test Subject")
-                                  ?? DetectSubject(uploadType, fileName);
+                                  ?? DetectSubject(uploadType, fileName, row);
                     var rawProficiency = GetVal(row, "Proficiency Level", "Performance Level",
                                             "Status", "Achievement Level",
                                             "Overall math tier", "Overall ELA tier", "Overall reading tier",
@@ -494,6 +538,28 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                             ? NormalizeIlearnPeriod(periodRaw, fileName)
                             : periodRaw;
 
+                    var normalizedSubject = NormalizeSubject(subject);
+                    var finalScore = score > 0 ? (double?)score : null;
+
+                    // A test event is identified by student + type + subject + date + score.
+                    // FileName is deliberately excluded: the same result arriving under two
+                    // different filenames is still one event, not two.
+                    if (!seenAssessments.TryGetValue(student.StudentId, out var signatures))
+                    {
+                        var existing = await cosmos.GetAssessmentsAsync(student.StudentId);
+                        signatures = existing
+                            .Select(a => AssessmentSignature(a.UploadType, a.Subject, a.Date, a.Score))
+                            .ToHashSet(StringComparer.Ordinal);
+                        seenAssessments[student.StudentId] = signatures;
+                    }
+
+                    var signature = AssessmentSignature(uploadType, normalizedSubject, date, finalScore);
+                    if (!signatures.Add(signature))
+                    {
+                        duplicateAssessments++;
+                        continue;
+                    }
+
                     await cosmos.CreateAssessmentAsync(new AssessmentDocument
                     {
                         Id         = Guid.NewGuid().ToString(),
@@ -501,8 +567,8 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         UploadType = uploadType,
                         FileName   = fileName,
                         UploadedAt = DateTime.UtcNow.ToString("o"),
-                        Subject    = NormalizeSubject(subject),
-                        Score      = score > 0 ? score : null,
+                        Subject    = normalizedSubject,
+                        Score      = finalScore,
                         Proficiency = proficiency,
                         Period     = period,
                         Date       = date,
@@ -519,10 +585,11 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             }
         }
 
-        return new ParseSummaryDto(rows.Count, imported, skipped, errors);
+        return new ParseSummaryDto(rows.Count, imported, skipped, errors, duplicateAssessments);
     }
 
-    private static string DetectSubject(string uploadType, string fileName)
+    private static string DetectSubject(string uploadType, string fileName,
+                                        Dictionary<string, string>? row = null)
     {
         // Acadience and I-Read are always Reading — must check before generic ELA/Reading check
         if (uploadType.Equals("Acadience", StringComparison.OrdinalIgnoreCase) ||
@@ -540,7 +607,21 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             fileName.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
             fileName.Contains("Mathematics", StringComparison.OrdinalIgnoreCase)) return "Math";
 
-        // ILEARN without ELA/Math in filename — store as Mixed; tier engine will treat as unknown
+        // Filename gave no signal. Combined IXL exports (e.g. "IXL-LevelUp-Diagnostic-Results-*.csv")
+        // contain neither "ELA" nor "Math" in the name, so rows from them were previously stored as
+        // "Mixed" — which the tier engine and dashboard subject grouping both ignore, silently
+        // discarding valid scores. The columns themselves are unambiguous, so fall back to those.
+        if (row is not null)
+        {
+            var hasEla  = row.Keys.Any(k => k.Contains("Overall ELA", StringComparison.OrdinalIgnoreCase)
+                                         || k.Contains("Overall reading", StringComparison.OrdinalIgnoreCase)
+                                         || k.Contains("Overall writing", StringComparison.OrdinalIgnoreCase));
+            var hasMath = row.Keys.Any(k => k.Contains("Overall math", StringComparison.OrdinalIgnoreCase));
+            if (hasEla && !hasMath) return "ELA";
+            if (hasMath && !hasEla) return "Math";
+        }
+
+        // Genuinely ambiguous — tier engine will treat as unknown.
         return "Mixed";
     }
 
@@ -692,7 +773,17 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         return rows;
     }
 
-    public record ParseSummaryDto(int TotalRows, int ImportedRows, int SkippedRows, List<string> Errors);
+    public record ParseSummaryDto(int TotalRows, int ImportedRows, int SkippedRows, List<string> Errors,
+                                  int DuplicateAssessments = 0);
+
+    // Identifies a single test event. Two rows sharing this signature are the same result,
+    // regardless of which file they arrived in.
+    private static string AssessmentSignature(string? uploadType, string? subject, string? date, double? score)
+        => string.Join('|',
+            (uploadType ?? "").Trim().ToLowerInvariant(),
+            (subject ?? "").Trim().ToLowerInvariant(),
+            (date ?? "").Trim(),
+            score?.ToString(CultureInfo.InvariantCulture) ?? "");
 
     // ─── Validation helpers ───────────────────────────────────────────────────
 
