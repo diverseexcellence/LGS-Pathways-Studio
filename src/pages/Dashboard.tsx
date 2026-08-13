@@ -26,6 +26,14 @@ interface Stats {
   homeRoomData: { homeRoom: string; initials: string; 'Tier 1': number; 'Tier 2': number; 'Tier 3': number; total: number }[];
 }
 
+// "-1" = Kindergarten — confirmed by LGS (Velvet Wright) on the 2026-08-14 client demo call.
+// Mirrors NormalizeGrade() in DashboardController.cs for client-side rendering.
+function normalizeGradeLabel(raw: string | number): string {
+  const cleaned = String(raw).trim().toUpperCase();
+  if (cleaned === 'K' || cleaned === 'KG' || cleaned === 'KINDERGARTEN' || cleaned === '0' || cleaned === '-1') return 'K';
+  return cleaned.replace(/^0+(?=\d)/, '');
+}
+
 function buildStats(students: Student[]): Stats {
   let t1 = 0, t2 = 0, t3 = 0;
   const gradeMap: Record<string, { proficient: number; developing: number; critical: number }> = {};
@@ -37,7 +45,7 @@ function buildStats(students: Student[]): Stats {
   for (const s of students) {
     const tier = s.tier || 'Pending';
     const tierStatus = s.tierStatus || 'Pending';
-    const grade = s.grade ? `Grade ${String(s.grade).replace(/^0+(?=\d)/, '')}` : 'Unknown';
+    const grade = s.grade ? `Grade ${normalizeGradeLabel(s.grade)}` : 'Unknown';
     const homeRoom = s.homeRoom || s.classGroup || 'Unassigned';
 
     // BRD DB-4: only Finalized students count in tier distribution aggregations

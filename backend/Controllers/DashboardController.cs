@@ -418,7 +418,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         if (string.IsNullOrWhiteSpace(raw)) return "Unknown";
         var cleaned = raw.Trim().ToUpperInvariant()
             .Replace("GRADE", "").Replace("GR.", "").Replace("GR", "").Trim();
-        if (cleaned is "K" or "KG" or "KINDERGARTEN" or "0") return "K";
+        // "-1" = Kindergarten — confirmed by LGS (Velvet Wright) on the 2026-08-14 client demo call.
+        if (cleaned is "K" or "KG" or "KINDERGARTEN" or "0" or "-1") return "K";
         if (int.TryParse(cleaned, out var n)) return n.ToString();
         return raw.Trim();
     }

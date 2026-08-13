@@ -109,6 +109,14 @@ function parseFlexibleDate(d: string): number {
   return isNaN(native) ? NaN : native;
 }
 
+// "-1" = Kindergarten — confirmed by LGS (Velvet Wright) on the 2026-08-14 client demo call.
+function normalizeGradeLabel(raw?: string | null): string {
+  if (!raw) return '';
+  const cleaned = String(raw).trim().toUpperCase();
+  if (cleaned === 'K' || cleaned === 'KG' || cleaned === 'KINDERGARTEN' || cleaned === '0' || cleaned === '-1') return 'K';
+  return cleaned.replace(/^0+(?=\d)/, '');
+}
+
 function formatDate(d: string) {
   const ts = parseFlexibleDate(d);
   if (!isNaN(ts)) return new Date(ts).toLocaleDateString();
@@ -398,7 +406,7 @@ export default function StudentProfile() {
                     STN {student.stn}
                   </span>
                 )}
-                <span className="text-xs text-slate-400">Grade {student.grade || '—'}</span>
+                <span className="text-xs text-slate-400">Grade {normalizeGradeLabel(student.grade) || '—'}</span>
                 <span className="text-slate-300 text-xs">•</span>
                 <span className="text-xs text-slate-400">{student.classGroup || '—'}</span>
                 {student.homeRoom && (
@@ -775,7 +783,7 @@ export default function StudentProfile() {
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Enrollment Information</p>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                   {[
-                    ['Grade', student.grade || 'N/A'],
+                    ['Grade', normalizeGradeLabel(student.grade) || 'N/A'],
                     ['Class Group', student.classGroup || 'N/A'],
                     ['Homeroom', student.homeRoom || 'N/A'],
                     ['Entry Date', student.entryDate ? new Date(student.entryDate).toLocaleDateString() : 'N/A'],

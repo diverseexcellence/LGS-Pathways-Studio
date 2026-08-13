@@ -437,6 +437,11 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                             Stn        = stn,
                             LocalId    = localId,
                             ClassGroup = "Unassigned",
+                            // IXL rows carry Grade/Gender too — flagged live during the 2026-08-14 client
+                            // demo as "several students missing grade levels"; this branch previously
+                            // dropped both even though the source row has them.
+                            Grade      = GetVal(row, "Grade", "Grade_Level", "Enrolled Grade")?.TrimStart('0'),
+                            Gender     = GetVal(row, "Gender"),
                             SourceFile = fileName,
                             Tier       = "Pending",
                             TierStatus = "Pending",
