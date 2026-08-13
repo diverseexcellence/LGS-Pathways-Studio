@@ -448,6 +448,17 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
                     if (student is null) { skipped++; continue; }
 
+                    // Assessment uploads only ever wrote an AssessmentDocument, never the matched
+                    // student record — so a student who only ever receives assessment files (no
+                    // further demographics re-upload) kept whatever SourceFile it had at creation,
+                    // which is blank for older records. Track the most recent file that touched
+                    // this student in any way so "Source File" reflects reality. See QA issue #11.
+                    if (!string.Equals(student.SourceFile, fileName, StringComparison.Ordinal))
+                    {
+                        student.SourceFile = fileName;
+                        await cosmos.UpsertStudentAsync(student);
+                    }
+
                     var scoreRaw = GetVal(row, "Score", "Scale Score", "Overall Score",
                                          "Overall ELA score", "Overall math score", "Overall reading score",
                                          "Overall math scale score", "Overall ELA scale score",
