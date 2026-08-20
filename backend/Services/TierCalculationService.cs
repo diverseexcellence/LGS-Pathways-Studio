@@ -217,7 +217,11 @@ public class TierCalculationService(
     {
         if (grade is null) return null;
         var g = grade.Trim().ToUpperInvariant();
-        if (g == "K" || g == "KG" || g == "KINDERGARTEN") return 0;
+        // "-1" is LGS's source code for Kindergarten (confirmed by Velvet Wright on the
+        // 2026-08-14 demo call). It must normalise to 0, not parse as -1: the K-2 Reading
+        // proxy below tests `grade is >= 0 and <= 2`, so a raw -1 fell outside that range
+        // and Kindergarteners with only Reading data were left permanently Pending.
+        if (g is "K" or "KG" or "KINDERGARTEN" or "-1") return 0;
         if (int.TryParse(g, out var n)) return n;
         return null;
     }
