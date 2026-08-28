@@ -112,7 +112,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     // of JSON input"), even though the import kept running to completion server-side regardless.
     // Poll GET import-landing-zone/status for progress and the final result.
     [HttpPost("import-landing-zone")]
-    public IActionResult ImportLandingZone()
+    public IActionResult ImportLandingZone([FromQuery] string? only)
     {
         if (!importStatus.TryStart())
             return Conflict(new { message = "A landing-zone import is already running. Poll GET /api/upload/import-landing-zone/status." });
@@ -123,7 +123,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
         // Deliberately not tied to HttpContext.RequestAborted — the whole point is that this must
         // keep running after the request that started it has ended.
-        _ = Task.Run(() => RunLandingZoneImportAsync(adminId, adminEmail, ip));
+        _ = Task.Run(() => RunLandingZoneImportAsync(adminId, adminEmail, ip, only));
 
         return Accepted(new { message = "Landing-zone import started in the background.", status = "running" });
     }
@@ -131,9 +131,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     [HttpGet("import-landing-zone/status")]
     public IActionResult ImportLandingZoneStatus() => Ok(importStatus.Current);
 
-    private async Task RunLandingZoneImportAsync(int adminId, string adminEmail, string? ip)
+    private async Task RunLandingZoneImportAsync(int adminId, string adminEmail, string? ip, string? only)
     {
-        try { await RunLandingZoneImportCoreAsync(adminId, adminEmail, ip); }
+        try { await RunLandingZoneImportCoreAsync(adminId, adminEmail, ip, only); }
         catch (Exception ex)
         {
             logger.LogError(ex, "Landing-zone import crashed");
@@ -141,7 +141,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         }
     }
 
-    private async Task RunLandingZoneImportCoreAsync(int adminId, string adminEmail, string? ip)
+    private async Task RunLandingZoneImportCoreAsync(int adminId, string adminEmail, string? ip, string? only)
     {
         List<LandingZoneFile> files;
         try { files = await blob.ListLandingZoneFilesAsync(CancellationToken.None); }
@@ -159,6 +159,14 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                 var stream = file.Content;
                 var ext = Path.GetExtension(name).ToLowerInvariant();
                 var uploadType = DetectUploadType(name);
+
+                if (!IncludeLandingZoneFile(name, only))
+                {
+                    results.Add(new { file = name, uploadType = "filtered", result = (object?)null,
+                                      error = "Skipped by import filter." });
+                    await stream.DisposeAsync();
+                    continue;
+                }
 
                 if (uploadType == "__SKIP__")
                 {
@@ -255,6 +263,29 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         }
 
         importStatus.Complete($"Processed {files.Count} file(s) from landing-zone.", results);
+    }
+
+    /// <summary>
+    /// Optional landing-zone filter. <c>only=cp1-cp2</c> imports ILEARN Checkpoint 1 and 2
+    /// files only (Checkpoint 3, IXL, Acadience, and PowerSchool are left untouched).
+    /// </summary>
+    internal static bool IncludeLandingZoneFile(string fileName, string? only)
+    {
+        if (string.IsNullOrWhiteSpace(only)) return true;
+        if (!only.Equals("cp1-cp2", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var n = fileName;
+        if (n.Contains("Checkpoint3", StringComparison.OrdinalIgnoreCase) ||
+            n.Contains("Checkpoint 3", StringComparison.OrdinalIgnoreCase) ||
+            n.Contains("CP3", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return n.Contains("Checkpoint1", StringComparison.OrdinalIgnoreCase) ||
+               n.Contains("Checkpoint 1", StringComparison.OrdinalIgnoreCase) ||
+               n.Contains("Checkpoint2", StringComparison.OrdinalIgnoreCase) ||
+               n.Contains("Checkpoint 2", StringComparison.OrdinalIgnoreCase) ||
+               n.Contains("CP1", StringComparison.OrdinalIgnoreCase) ||
+               n.Contains("CP2", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string DetectUploadType(string fileName)

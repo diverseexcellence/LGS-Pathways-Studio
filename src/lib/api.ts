@@ -277,8 +277,11 @@ export const uploadApi = {
   // Service's platform request timeout, which reset the connection mid-response (surfaced to the
   // browser as a JSON parse error) even though the import kept running to completion server-side.
   // Poll importLandingZoneStatus() for progress and the final result.
-  importLandingZone: () =>
-    request<{ message: string; status: string }>('/api/upload/import-landing-zone', { method: 'POST' }),
+  importLandingZone: (only?: string) =>
+    request<{ message: string; status: string }>(
+      `/api/upload/import-landing-zone${only ? `?only=${encodeURIComponent(only)}` : ''}`,
+      { method: 'POST' },
+    ),
 
   importLandingZoneStatus: () =>
     request<LandingZoneImportStatus>('/api/upload/import-landing-zone/status'),
