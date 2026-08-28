@@ -464,8 +464,15 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         && !string.IsNullOrWhiteSpace(parts[1]))
                         name = $"{parts[1].Trim()} {parts[0].Trim()}";
                 }
-                // For non-demographics, skip if no name. Demographics rows may still enrich via STN.
-                if (string.IsNullOrWhiteSpace(name) && uploadType != "demographics") { skipped++; continue; }
+                // ILEARN/IREAD/Acadience exports often have STN + DOB but no name column.
+                // Demographics rows may still enrich via STN. Skip only when there is nothing
+                // to match on.
+                if (string.IsNullOrWhiteSpace(name) && uploadType != "demographics")
+                {
+                    var idHint = GetVal(row, "STN", "Student State ID", "State_StudentNumber",
+                                         "Student_Number", "Student Number", "Local ID", "Local Student ID");
+                    if (string.IsNullOrWhiteSpace(idHint)) { skipped++; continue; }
+                }
 
                 if (uploadType == "demographics")
                 {
@@ -603,7 +610,15 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         localId = GetVal(row, "ID");
 
                     if (!string.IsNullOrWhiteSpace(stn))
+                    {
                         student = await cosmos.FindStudentByStnAsync(stn);
+                        // CP3 backfill stored some STNs with a leading T (ILEARN student ID);
+                        // CP1/CP2 files use the numeric STN. Try both shapes.
+                        if (student is null && stn.StartsWith("T", StringComparison.OrdinalIgnoreCase) && stn.Length > 1)
+                            student = await cosmos.FindStudentByStnAsync(stn[1..]);
+                        else if (student is null && !stn.StartsWith("T", StringComparison.OrdinalIgnoreCase))
+                            student = await cosmos.FindStudentByStnAsync("T" + stn);
+                    }
                     if (student is null && !string.IsNullOrWhiteSpace(localId))
                         student = await cosmos.FindStudentByLocalIdAsync(localId);
                     if (student is null && !string.IsNullOrWhiteSpace(name))
