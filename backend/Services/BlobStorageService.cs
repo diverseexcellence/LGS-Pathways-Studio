@@ -58,7 +58,8 @@ public class BlobStorageService(IConfiguration config) : IBlobStorageService
         if (string.IsNullOrEmpty(connStr))
             throw new InvalidOperationException("Landing zone connection string not configured. Set LandingZone:ConnectionString in App Service environment variables.");
 
-        var landingZone = new BlobContainerClient(connStr, "landing-zone");
+        var containerName = config["LandingZone:ContainerName"] ?? "landing-zone";
+        var landingZone = new BlobContainerClient(connStr, containerName);
         var results = new List<LandingZoneFile>();
 
         await foreach (var item in landingZone.GetBlobsAsync(cancellationToken: ct))
