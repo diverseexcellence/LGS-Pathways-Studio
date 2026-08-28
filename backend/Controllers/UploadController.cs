@@ -13,7 +13,7 @@ namespace LgsImpact.Api.Controllers;
 [ApiController]
 [Route("api/upload")]
 [Authorize]
-public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction, ISchoolAverageService schoolAverages, ITierCalculationService tierCalculation, ILogger<UploadController> logger) : ControllerBase
+public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction, ISchoolAverageService schoolAverages, ITierCalculationService tierCalculation, ILogger<UploadController> logger, ILandingZoneImportStatusService importStatus) : ControllerBase
 {
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
@@ -105,18 +105,54 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         return Ok(result);
     }
 
+    // Runs the whole batch in the background and returns immediately. This used to block the HTTP
+    // request for every file in the container — with a couple dozen files and per-row Cosmos
+    // lookups for student matching, that routinely exceeded Azure App Service's ~230s platform
+    // request timeout. The connection got reset mid-response (browsers see this as "Unexpected end
+    // of JSON input"), even though the import kept running to completion server-side regardless.
+    // Poll GET import-landing-zone/status for progress and the final result.
     [HttpPost("import-landing-zone")]
-    public async Task<IActionResult> ImportLandingZone(CancellationToken ct)
+    public IActionResult ImportLandingZone()
+    {
+        if (!importStatus.TryStart())
+            return Conflict(new { message = "A landing-zone import is already running. Poll GET /api/upload/import-landing-zone/status." });
+
+        var adminId = CurrentAdminId;
+        var adminEmail = CurrentAdminEmail;
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+
+        // Deliberately not tied to HttpContext.RequestAborted — the whole point is that this must
+        // keep running after the request that started it has ended.
+        _ = Task.Run(() => RunLandingZoneImportAsync(adminId, adminEmail, ip));
+
+        return Accepted(new { message = "Landing-zone import started in the background.", status = "running" });
+    }
+
+    [HttpGet("import-landing-zone/status")]
+    public IActionResult ImportLandingZoneStatus() => Ok(importStatus.Current);
+
+    private async Task RunLandingZoneImportAsync(int adminId, string adminEmail, string? ip)
+    {
+        try { await RunLandingZoneImportCoreAsync(adminId, adminEmail, ip); }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Landing-zone import crashed");
+            importStatus.Fail(ex.Message);
+        }
+    }
+
+    private async Task RunLandingZoneImportCoreAsync(int adminId, string adminEmail, string? ip)
     {
         List<LandingZoneFile> files;
-        try { files = await blob.ListLandingZoneFilesAsync(ct); }
-        catch (Exception ex) { return BadRequest(new { message = $"Could not access landing-zone: {ex.Message}" }); }
+        try { files = await blob.ListLandingZoneFilesAsync(CancellationToken.None); }
+        catch (Exception ex) { importStatus.Fail($"Could not access landing-zone: {ex.Message}"); return; }
 
-        if (files.Count == 0) return Ok(new { message = "No CSV or Excel files found in landing-zone.", results = Array.Empty<object>() });
+        if (files.Count == 0) { importStatus.Complete("No CSV or Excel files found in landing-zone.", new List<object>()); return; }
 
         var results = new List<object>();
         foreach (var file in files)
         {
+            var ct = CancellationToken.None;
             try
             {
                 var name = file.Name;
@@ -173,7 +209,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                 await cosmos.CreateUploadLogAsync(new UploadLogDocument
                 {
                     Id           = Guid.NewGuid().ToString(),
-                    UploadedBy   = CurrentAdminEmail,
+                    UploadedBy   = adminEmail,
                     FileName     = name,
                     UploadType   = uploadType,
                     UploadedAt   = DateTime.UtcNow.ToString("o"),
@@ -183,10 +219,10 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     Errors       = result.Errors
                 });
 
-                await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+                await audit.LogAsync(adminId, adminEmail,
                     AuditEventType.Upload, entityType: "Upload", entityId: name,
                     details: $"Landing zone import: {name} ({uploadType}) — {result.ImportedRows} rows, {result.SkippedRows} skipped",
-                    ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+                    ip: ip);
 
                 results.Add(new { file = name, uploadType, result });
             }
@@ -201,27 +237,24 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         }
 
         // Refresh school averages and recompute tiers for all students with at least one
-        // non-Finalized subject.
-        _ = Task.Run(async () =>
-        {
-            try { await schoolAverages.RefreshAsync(); }
-            catch (Exception ex) { logger.LogError(ex, "School average refresh failed after landing-zone import"); }
-        });
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
-                var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsFinalized).ToList());
-                logger.LogInformation("Landing-zone tier recalculation updated {Count} of {Total} students", updated, students.Count);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Landing-zone tier recalculation failed");
-            }
-        });
+        // non-Finalized subject. Awaited (not fire-and-forget) — this whole method already runs
+        // off the request thread, so there's no HTTP timeout left to race against, and awaiting
+        // means the "completed" status below only fires once tiers actually reflect the import.
+        try { await schoolAverages.RefreshAsync(); }
+        catch (Exception ex) { logger.LogError(ex, "School average refresh failed after landing-zone import"); }
 
-        return Ok(new { message = $"Processed {files.Count} file(s) from landing-zone.", results });
+        try
+        {
+            var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
+            var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsFinalized).ToList());
+            logger.LogInformation("Landing-zone tier recalculation updated {Count} of {Total} students", updated, students.Count);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Landing-zone tier recalculation failed");
+        }
+
+        importStatus.Complete($"Processed {files.Count} file(s) from landing-zone.", results);
     }
 
     private static string DetectUploadType(string fileName)
@@ -389,11 +422,16 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     if (!string.IsNullOrWhiteSpace(first) && !string.IsNullOrWhiteSpace(last))
                         name = $"{first} {last}";
                 }
-                // Handle "Last, First" combined format (some IXL exports)
-                if (!string.IsNullOrWhiteSpace(name) && name.Contains(',') && !name.Contains(' '))
+                // Handle "Last, First" (ILEARN StudentData: "Adams, Gionni") including a space
+                // after the comma. The previous `!name.Contains(' ')` guard left those unmatched
+                // against roster names stored as "First Last".
+                if (!string.IsNullOrWhiteSpace(name) && name.Contains(','))
                 {
                     var parts = name.Split(',', 2);
-                    if (parts.Length == 2) name = $"{parts[1].Trim()} {parts[0].Trim()}";
+                    if (parts.Length == 2
+                        && !string.IsNullOrWhiteSpace(parts[0])
+                        && !string.IsNullOrWhiteSpace(parts[1]))
+                        name = $"{parts[1].Trim()} {parts[0].Trim()}";
                 }
                 // For non-demographics, skip if no name. Demographics rows may still enrich via STN.
                 if (string.IsNullOrWhiteSpace(name) && uploadType != "demographics") { skipped++; continue; }
@@ -575,6 +613,20 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
 
                     if (student is null) { skipped++; continue; }
 
+                    // Assessment rows often carry STN/DOB that the IXL auto-create stub never
+                    // stored. Without those, a later PowerSchool file cannot match (LocalId → STN
+                    // → name+DOB) and every student stays ClassGroup = "Unassigned".
+                    var studentDirty = false;
+                    if (string.IsNullOrWhiteSpace(student.Stn) && !string.IsNullOrWhiteSpace(stn))
+                    { student.Stn = stn; studentDirty = true; }
+                    if (string.IsNullOrWhiteSpace(student.LocalId) && !string.IsNullOrWhiteSpace(localId))
+                    { student.LocalId = localId; studentDirty = true; }
+                    if (string.IsNullOrWhiteSpace(student.Dob))
+                    {
+                        var rowDob = GetVal(row, "DOB", "Date of Birth", "Birth Date", "Student DOB", "STUDENTS.DOB");
+                        if (!string.IsNullOrWhiteSpace(rowDob)) { student.Dob = rowDob; studentDirty = true; }
+                    }
+
                     // Assessment uploads only ever wrote an AssessmentDocument, never the matched
                     // student record — so a student who only ever receives assessment files (no
                     // further demographics re-upload) kept whatever SourceFile it had at creation,
@@ -583,6 +635,11 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     if (!string.Equals(student.SourceFile, fileName, StringComparison.Ordinal))
                     {
                         student.SourceFile = fileName;
+                        studentDirty = true;
+                    }
+                    if (studentDirty)
+                    {
+                        student.LastUpdated = DateTime.UtcNow.ToString("o");
                         await cosmos.UpsertStudentAsync(student);
                     }
 

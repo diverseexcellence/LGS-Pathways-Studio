@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, Search, X, ShieldAlert, Download, RefreshCw } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, Search, X, ShieldAlert, Download, RefreshCw, Cloud } from 'lucide-react';
 import { uploadApi, exportApi, unmatchedStnsApi, ParseSummary, UploadLog, UnmatchedStnRow } from '../lib/api';
 
 const UPLOAD_TYPES = [
@@ -142,27 +142,38 @@ export default function DataIngestion() {
     }
   };
 
+  // The import runs in the background on the server (a batch of landing-zone files with per-row
+  // student-matching lookups can take longer than Azure's platform request timeout), so this polls
+  // for status instead of waiting on one long request. The backend also recalculates tiers itself
+  // once the import finishes, before marking the job "completed".
   const handleImportLandingZone = async () => {
     setIsImporting(true);
     setImportResults(null);
     setStatus(null);
+    setRecalcStatus(null);
     try {
-      const res = await uploadApi.importLandingZone();
-      setImportResults(res.results);
-      const total = res.results.reduce((sum, r) => sum + (r.result?.importedRows ?? 0), 0);
-      setStatus({ type: 'success', message: `${res.message} ${total} record(s) imported.` });
-      await fetchLogs();
+      await uploadApi.importLandingZone();
+      setStatus({ type: 'success', message: 'Import started — this can take a few minutes for a large batch.' });
 
-      // Auto-recalculate tiers after landing zone import
-      try {
-        setIsRecalculating(true);
-        const recalc = await uploadApi.recalculateTiers();
-        setRecalcStatus({ type: 'success', message: recalc.message });
-      } catch {
-        setRecalcStatus({ type: 'error', message: 'Tier recalculation failed after import.' });
-      } finally {
-        setIsRecalculating(false);
+      const POLL_INTERVAL_MS = 4000;
+      const MAX_POLLS = 150; // ~10 minutes
+      for (let i = 0; i < MAX_POLLS; i++) {
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+        const poll = await uploadApi.importLandingZoneStatus();
+        if (poll.state === 'completed') {
+          setImportResults(poll.results ?? []);
+          const total = (poll.results ?? []).reduce((sum, r) => sum + (r.result?.importedRows ?? 0), 0);
+          setStatus({ type: 'success', message: `${poll.message ?? 'Import complete.'} ${total} record(s) imported. Tiers recalculated.` });
+          await fetchLogs();
+          return;
+        }
+        if (poll.state === 'failed') {
+          setStatus({ type: 'error', message: poll.error || 'Import failed' });
+          return;
+        }
+        // still "running" — keep polling
       }
+      setStatus({ type: 'error', message: 'Import is taking longer than expected — check back later or re-check status.' });
     } catch (err: any) {
       setStatus({ type: 'error', message: err.message || 'Import failed' });
     } finally {
@@ -317,13 +328,37 @@ export default function DataIngestion() {
 
         <button
           onClick={processUpload}
-          disabled={files.length === 0 || isUploading}
+          disabled={files.length === 0 || isUploading || isImporting}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-lgs-red text-white rounded-lg font-medium hover:bg-lgs-red-dark disabled:opacity-50 transition-colors"
         >
           <Upload className="w-5 h-5" />
           {isUploading ? 'Uploading & Parsing…' : 'Upload Data'}
         </button>
 
+        <div className="relative flex items-center gap-3">
+          <div className="flex-1 border-t border-slate-200" />
+          <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">or</span>
+          <div className="flex-1 border-t border-slate-200" />
+        </div>
+
+        <button
+          onClick={handleImportLandingZone}
+          disabled={isImporting || isUploading}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border border-slate-300 text-slate-700 rounded-lg font-medium hover:bg-slate-50 disabled:opacity-50 transition-colors"
+        >
+          <Cloud className={`w-5 h-5 ${isImporting ? 'animate-pulse' : ''}`} />
+          {isImporting ? 'Importing from Landing Zone…' : 'Import from Landing Zone'}
+        </button>
+        <p className="text-xs text-slate-400 text-center -mt-2">
+          Pulls every CSV/xlsx currently in the Azure landing-zone container. Files already imported (matching content hash) are skipped. Tiers are recalculated when the batch finishes.
+        </p>
+
+        {isImporting && (
+          <div className="p-3 rounded-lg text-sm border flex items-center gap-2 bg-slate-50 text-slate-600 border-slate-200">
+            <RefreshCw className="w-4 h-4 shrink-0 animate-spin" />
+            Import running in the background — this can take a few minutes for a large batch.
+          </div>
+        )}
 
         {isRecalculating && (
           <div className="p-3 rounded-lg text-sm border flex items-center gap-2 bg-slate-50 text-slate-600 border-slate-200">

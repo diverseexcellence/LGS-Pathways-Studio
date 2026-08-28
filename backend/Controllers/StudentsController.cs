@@ -57,12 +57,15 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         if (student is null || !student.IsActive) return NotFound();
 
         var changed = new List<string>();
+        var oldClassGroup = student.ClassGroup;
         if (dto.ClassGroup is not null) { student.ClassGroup = dto.ClassGroup; changed.Add($"ClassGroup→{dto.ClassGroup}"); }
         if (dto.Grade is not null) { student.Grade = dto.Grade; changed.Add($"Grade→{dto.Grade}"); }
         if (dto.HomeRoom is not null) { student.HomeRoom = dto.HomeRoom; changed.Add($"HomeRoom→{dto.HomeRoom}"); }
         student.LastUpdated = DateTime.UtcNow.ToString("o");
 
-        await cosmos.UpsertStudentAsync(student);
+        // classGroup is the Cosmos partition key — changing it without deleting the old
+        // partition copy leaves phantom Unassigned duplicates in the directory.
+        await cosmos.MoveStudentPartitionAsync(student, oldClassGroup);
 
         await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
             AuditEventType.Edit, entityType: "Student", entityId: id,

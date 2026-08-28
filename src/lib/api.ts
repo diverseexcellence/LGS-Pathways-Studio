@@ -244,6 +244,15 @@ export const assessmentsApi = {
     request<Assessment[]>(`/api/assessments?studentId=${studentId}&subject=${subject}`),
 };
 
+export interface LandingZoneImportStatus {
+  state: 'idle' | 'running' | 'completed' | 'failed';
+  startedAt: string | null;
+  completedAt: string | null;
+  message: string | null;
+  results: { file: string; uploadType?: string; result?: ParseSummary; error?: string }[] | null;
+  error: string | null;
+}
+
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
 export const uploadApi = {
@@ -258,11 +267,16 @@ export const uploadApi = {
 
   deleteLog: (id: string) => request<void>(`/api/upload/logs/${id}`, { method: 'DELETE' }),
 
+  // Starts the import in the background and returns immediately — with a couple dozen landing-zone
+  // files and per-row Cosmos lookups, the old synchronous version routinely exceeded Azure App
+  // Service's platform request timeout, which reset the connection mid-response (surfaced to the
+  // browser as a JSON parse error) even though the import kept running to completion server-side.
+  // Poll importLandingZoneStatus() for progress and the final result.
   importLandingZone: () =>
-    request<{ message: string; results: { file: string; uploadType?: string; result?: ParseSummary; error?: string }[] }>(
-      '/api/upload/import-landing-zone',
-      { method: 'POST' }
-    ),
+    request<{ message: string; status: string }>('/api/upload/import-landing-zone', { method: 'POST' }),
+
+  importLandingZoneStatus: () =>
+    request<LandingZoneImportStatus>('/api/upload/import-landing-zone/status'),
 
   recalculateTiers: () =>
     request<{ message: string; processed: number; updated: number }>(

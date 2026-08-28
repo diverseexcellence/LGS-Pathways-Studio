@@ -76,24 +76,10 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             pending = allStudents.Count - mathTiered.Count,
         };
 
-        // ── ELA growth % ─────────────────────────────────────────────────────
-        // Per student: earliest vs latest ELA score. Average the deltas across students who have ≥2 records.
-        var elaByStudent = allAssessments
-            .Where(a => AssessmentNormalization.NormalizeSubject(a.Subject) == "ELA" && a.StudentId != null && a.Score.HasValue)
-            .GroupBy(a => a.StudentId)
-            .Where(g => g.Count() >= 2)
-            .ToList();
-
-        double? elaGrowth = null;
-        if (elaByStudent.Count > 0)
-        {
-            var deltas = elaByStudent.Select(g =>
-            {
-                var ordered = g.OrderBy(a => a.DateIso ?? a.Date ?? a.UploadedAt).ToList();
-                return ordered.Last().Score!.Value - ordered.First().Score!.Value;
-            }).ToList();
-            elaGrowth = Math.Round(deltas.Average(), 1);
-        }
+        // ── ELA growth (same instrument only) ────────────────────────────────
+        // IXL diagnostic scores and ILEARN scale scores are different units; subtracting them
+        // is not growth. Require ≥2 scored ELA results from one upload type per student.
+        var (elaGrowth, elaGrowthStudents) = DashboardMetrics.ElaSameInstrumentGrowth(allAssessments);
 
         return Ok(new
         {
@@ -101,7 +87,7 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             mathStudentsTotal = mathTotal,
             mathStudentsOnAbove = mathOnAbove,
             elaGrowthAvgDelta = elaGrowth,
-            elaStudentsWithGrowthData = elaByStudent.Count,
+            elaStudentsWithGrowthData = elaGrowthStudents,
             elaTierCounts,
             mathTierCounts,
         });
@@ -113,15 +99,18 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
     public async Task<IActionResult> Timeline()
     {
         var allAssessments = await cosmos.GetAllAssessmentsAsync();
+        var ruleset = await cosmos.GetTierRulesetConfigAsync();
 
-        // Group by calendar month (yyyy-MM), average score per subject per month
+        // Monthly average of the shared 0–3 proficiency scale (same resolver as the tier engine).
+        // Raw scores cannot be averaged across IXL and ILEARN.
         var monthMap = new Dictionary<string, (List<double> ela, List<double> math)>();
 
         foreach (var a in allAssessments)
         {
-            if (!a.Score.HasValue) continue;
             var subject = AssessmentNormalization.NormalizeSubject(a.Subject);
             if (subject != "ELA" && subject != "Math") continue;
+            if (!PerformanceLevelNormalizer.TryResolve(a.UploadType, a.Proficiency, ruleset, out var value))
+                continue;
 
             var dateStr = a.DateIso ?? a.Date ?? a.UploadedAt;
             if (!DateTime.TryParse(dateStr, out var dt)) continue;
@@ -133,8 +122,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
                 monthMap[key] = bucket;
             }
 
-            if (subject == "ELA") bucket.ela.Add(a.Score.Value);
-            else bucket.math.Add(a.Score.Value);
+            if (subject == "ELA") bucket.ela.Add(value);
+            else bucket.math.Add(value);
         }
 
         var result = monthMap

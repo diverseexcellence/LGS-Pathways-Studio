@@ -402,8 +402,8 @@ export default function Dashboard() {
           badgeColor={kpis?.elaGrowthAvgDelta != null ? (kpis.elaGrowthAvgDelta >= 0 ? 'text-green-600 bg-green-50' : 'text-lgs-red bg-red-50') : 'text-slate-400 bg-slate-100'}
           label="Avg. ELA Growth"
           value={kpis == null ? '...' : kpis.elaGrowthAvgDelta != null ? (kpis.elaGrowthAvgDelta >= 0 ? `+${kpis.elaGrowthAvgDelta}` : String(kpis.elaGrowthAvgDelta)) : 'N/A'}
-          sub={kpis == null ? '' : kpis.elaStudentsWithGrowthData > 0 ? `${kpis.elaStudentsWithGrowthData} students with 2+ assessments` : 'Insufficient data for growth calc'}
-          tooltip="Average score delta (latest minus earliest ELA assessment) across students with 2+ ELA records. Source: ILEARN & IXL."
+          sub={kpis == null ? '' : kpis.elaStudentsWithGrowthData > 0 ? `${kpis.elaStudentsWithGrowthData} students with 2+ scores on the same test` : 'Need 2+ IXL or 2+ ILEARN ELA scores'}
+          tooltip="Average change in raw ELA score (latest minus earliest), only when both scores come from the same assessment. IXL and ILEARN scales are not comparable."
         />
         <KpiCard
           icon={<Award className="w-6 h-6 text-lgs-red" />}
@@ -457,18 +457,18 @@ export default function Dashboard() {
               <TrendingUp className="w-5 h-5 text-lgs-red" />
               Academic Growth Timeline
             </h2>
-            <p className="text-sm text-slate-500 mt-1">Monthly average growth percentiles across ELA and Mathematics.</p>
+            <p className="text-sm text-slate-500 mt-1">Monthly average proficiency (0–3) for ELA and Math. Below = 0, Approaching = 1, On = 2, Above = 3.</p>
           </div>
           <div className="flex-1 min-h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={timelineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} domain={[0, 80]} ticks={[0, 20, 40, 60, 80]} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} domain={[0, 3]} ticks={[0, 1, 2, 3]} />
                 <RechartsTooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} itemStyle={{ fontSize: '12px', fontWeight: 500 }} labelStyle={{ fontSize: '12px', color: '#64748b' }} />
                 <Legend iconType="square" wrapperStyle={{ fontSize: '12px', paddingTop: '20px' }} />
-                <Line type="monotone" name="ELA Growth" dataKey="ela" stroke="#214965" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
-                <Line type="monotone" name="Math Growth" dataKey="math" stroke="#b91c1c" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                <Line type="monotone" name="ELA" dataKey="ela" stroke="#214965" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                <Line type="monotone" name="Math" dataKey="math" stroke="#b91c1c" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
