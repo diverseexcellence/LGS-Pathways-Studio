@@ -70,6 +70,8 @@ public class AiController(
         try
         {
             summaryText = await llm.GenerateSummaryAsync(prompt, ct);
+            if (string.IsNullOrWhiteSpace(summaryText))
+                throw new HttpRequestException("LLM returned an empty summary.");
         }
         catch (Exception ex)
         {

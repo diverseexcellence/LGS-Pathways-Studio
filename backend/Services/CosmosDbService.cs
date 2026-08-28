@@ -160,12 +160,15 @@ public class CosmosDbService : ICosmosDbService
             allItems.AddRange(pg);
         }
 
-        // Apply search filter in memory (Cosmos free-text search requires Search API)
+        // Apply search filter in memory (Cosmos free-text search requires Search API).
+        // BRD ST-2: directory search must match STN (exact or partial), not only name.
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.ToLowerInvariant();
             allItems = allItems.Where(x =>
                 x.FullName.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(x.Stn) && x.Stn.Contains(s, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(x.LocalId) && x.LocalId.Contains(s, StringComparison.OrdinalIgnoreCase)) ||
                 x.ClassGroup.Contains(s, StringComparison.OrdinalIgnoreCase))
                 .ToList();
         }

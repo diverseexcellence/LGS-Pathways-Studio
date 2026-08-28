@@ -256,7 +256,8 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
             foreach (var a in assessments)
             {
                 if (needStn)
-                    stn ??= ExtractRaw(a.RawFields, "STN", "State_StudentNumber", "State Student Number", "SSID", "ILEARN Student ID");
+                    stn ??= ExtractRaw(a.RawFields, "STN", "State_StudentNumber", "State Student Number",
+                        "SSID", "ILEARN Student ID", "Student State ID", "Statewide Student ID");
                 if (needDob)
                     dob ??= ExtractRaw(a.RawFields, "DOB", "Date of Birth", "Birth Date", "Student DOB");
                 if ((!needStn || stn is not null) && (!needDob || dob is not null)) break;

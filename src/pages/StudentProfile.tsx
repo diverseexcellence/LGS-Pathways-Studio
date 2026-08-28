@@ -621,23 +621,32 @@ export default function StudentProfile() {
             </div>
             {aiSummary ? (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                <div className="text-sm text-slate-800 leading-relaxed prose prose-sm max-w-none
-                  prose-headings:text-slate-800 prose-headings:font-semibold
-                  prose-h2:text-base prose-h2:mt-2 prose-h2:mb-1
-                  prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-                  prose-ul:my-1 prose-li:my-0.5
-                  prose-p:my-1">
-                  <ReactMarkdown>
-                    {(() => {
-                      const firstName = student?.fullName?.trim().split(/\s+/)[0] ?? 'The student';
-                      return aiSummary.summaryText
-                        // Strip the redundant top-level heading the LLM emits from the prompt template
-                        .replace(/^##\s+AI Assistant Summary\s*\n?/im, '')
-                        .replace(/\bStudent\s+S-[A-Za-z0-9-]+/gi, firstName)
-                        .replace(/\bS-[A-Za-z0-9-]+\b/gi, firstName);
-                    })()}
-                  </ReactMarkdown>
-                </div>
+                {(() => {
+                  const firstName = student?.fullName?.trim().split(/\s+/)[0] ?? 'The student';
+                  const displayText = (aiSummary.summaryText || '')
+                    // Strip the redundant top-level heading the LLM emits from the prompt template
+                    .replace(/^##\s+AI Assistant Summary\s*\n?/im, '')
+                    .replace(/\bStudent\s+S-[A-Za-z0-9-]+/gi, firstName)
+                    .replace(/\bS-[A-Za-z0-9-]+\b/gi, firstName)
+                    .trim();
+                  if (!displayText) {
+                    return (
+                      <p className="text-sm text-slate-500">
+                        Generation finished but the model returned no text. Click Regenerate.
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="text-sm text-slate-800 leading-relaxed prose prose-sm max-w-none
+                      prose-headings:text-slate-800 prose-headings:font-semibold
+                      prose-h2:text-base prose-h2:mt-2 prose-h2:mb-1
+                      prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+                      prose-ul:my-1 prose-li:my-0.5
+                      prose-p:my-1">
+                      <ReactMarkdown>{displayText}</ReactMarkdown>
+                    </div>
+                  );
+                })()}
                 <p className="text-xs text-slate-400 mt-3">Generated: {new Date(aiSummary.generatedAt).toLocaleString()}</p>
               </div>
             ) : (

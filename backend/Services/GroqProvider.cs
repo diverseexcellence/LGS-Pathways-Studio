@@ -42,18 +42,23 @@ public class GroqProvider(IConfiguration config, IHttpClientFactory httpFactory)
         ?? Environment.GetEnvironmentVariable("GROQ_API_KEY")
         ?? throw new InvalidOperationException("Groq API key not configured. Set LlmProvider:ApiKey or GROQ_API_KEY.");
 
+    // gpt-oss spends completion tokens on hidden reasoning first. 512 was often
+    // exhausted before any visible summary, so Groq returned HTTP 200 with empty content.
+    private const int MaxCompletionTokens = 2048;
+
     public async Task<string> GenerateSummaryAsync(string prompt, CancellationToken ct = default)
     {
-        var body = new
+        var body = new Dictionary<string, object?>
         {
-            model = ModelName,
-            messages = new[]
-            {
-                new { role = "user", content = prompt }
-            },
-            temperature = 0.3,
-            max_tokens = 512
+            ["model"] = ModelName,
+            ["messages"] = new[] { new { role = "user", content = prompt } },
+            ["temperature"] = 0.3,
+            ["max_completion_tokens"] = MaxCompletionTokens,
         };
+        // gpt-oss defaults to medium reasoning, which can consume the whole budget
+        // before any visible summary. Low leaves room for the teacher-facing text.
+        if (ModelName.Contains("gpt-oss", StringComparison.OrdinalIgnoreCase))
+            body["reasoning_effort"] = "low";
 
         using var client = httpFactory.CreateClient("llm");
         using var req = new HttpRequestMessage(HttpMethod.Post, BaseUrl);
@@ -66,12 +71,21 @@ public class GroqProvider(IConfiguration config, IHttpClientFactory httpFactory)
             throw new HttpRequestException($"Groq {(int)res.StatusCode}: {ExtractGroqError(json)}");
 
         using var doc = JsonDocument.Parse(json);
-        return doc.RootElement
-            .GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString()
-            ?? "Summary unavailable.";
+        var choice = doc.RootElement.GetProperty("choices")[0];
+        var message = choice.GetProperty("message");
+        var content = message.TryGetProperty("content", out var contentEl)
+            ? contentEl.GetString()
+            : null;
+        var finishReason = choice.TryGetProperty("finish_reason", out var fr)
+            ? fr.GetString()
+            : null;
+
+        if (string.IsNullOrWhiteSpace(content))
+            throw new HttpRequestException(
+                $"Groq returned empty content (finish_reason={finishReason ?? "unknown"}). " +
+                "The reasoning model used the token budget before writing the summary.");
+
+        return content;
     }
 
     private static string ExtractGroqError(string json)
