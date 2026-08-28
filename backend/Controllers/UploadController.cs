@@ -6,6 +6,8 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using CsvHelper;
 using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 using OfficeOpenXml;
 
 namespace LgsImpact.Api.Controllers;
@@ -13,7 +15,7 @@ namespace LgsImpact.Api.Controllers;
 [ApiController]
 [Route("api/upload")]
 [Authorize]
-public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction, ISchoolAverageService schoolAverages, ITierCalculationService tierCalculation, ILogger<UploadController> logger, ILandingZoneImportStatusService importStatus) : ControllerBase
+public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction, ISchoolAverageService schoolAverages, ITierCalculationService tierCalculation, ILogger<UploadController> logger, ILandingZoneImportStatusService importStatus, IConfiguration configuration) : ControllerBase
 {
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
@@ -376,6 +378,306 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         return Ok(new { summary = exclusionsBySourceAndReason, students = report });
     }
 
+    // ── STN diagnostic (read-only): why does this student have no State Student Number? ──────────
+    // For each active student with a blank/null Stn, re-parses every file currently sitting in the
+    // landing-zone container (in memory, never stored) and classifies why no STN has landed on
+    // them, without changing any matching/import logic:
+    //   DUPLICATE_HOLDS_STN — another student record (any active state) has the same name and a
+    //                         real STN — likely a soft-deleted or unmerged duplicate.
+    //   SOURCE_NEAR_MISS    — a source row's name normalizes to the same name and carries an STN,
+    //                         but today's exact/ordinal name comparison wouldn't match it.
+    //   SOURCE_ROW_NO_STN   — a source row matches by name, but its STN cell is genuinely blank.
+    //   NO_SOURCE_ROW       — no candidate row found at all (a coverage gap, not a code bug — e.g.
+    //                         a K-2 student with no ILEARN row to backfill from).
+    // No raw names are returned unless includeNames=true (super-admin only, audited) — every other
+    // response uses studentId plus a non-reversible fingerprint so this is safe to run and share
+    // without exposing any new PII beyond what the Students grid already shows.
+    [HttpGet("stn-diagnostics")]
+    public async Task<IActionResult> StnDiagnostics([FromQuery] bool includeNames = false, CancellationToken ct = default)
+    {
+        if (includeNames)
+        {
+            var isSuperAdmin = User.FindFirstValue("superAdmin") == "true";
+            if (!isSuperAdmin) return Forbid();
+
+            await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+                AuditEventType.Export, entityType: "DataQuality", entityId: "stn-diagnostics",
+                details: "Ran STN diagnostics with includeNames=true (student names exposed in response).",
+                ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+        }
+
+        // activeOnly:false is deliberate — the STN-holding twin of a name mismatch may already be
+        // soft-deleted by a prior dedup run.
+        var (allStudents, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: false);
+        var cohort = allStudents.Where(s => s.IsActive && string.IsNullOrWhiteSpace(s.Stn)).ToList();
+
+        if (cohort.Count == 0)
+            return Ok(new { totalMissingStn = 0, buckets = new Dictionary<string, int>(), students = Array.Empty<object>() });
+
+        // Any other student (active or not) sharing a normalized name with a non-blank STN.
+        var byNormalizedName = allStudents
+            .Where(s => !string.IsNullOrWhiteSpace(s.FullName))
+            .GroupBy(s => DiagNormalizeName(s.FullName))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        // Re-parse every landing-zone file in memory. Never written anywhere — purely for this
+        // report. Best-effort: a single bad file shouldn't abort the whole diagnostic.
+        var candidates = new List<(string Name, string? Stn, string UploadType, string FileName)>();
+        List<LandingZoneFile> files;
+        try { files = await blob.ListLandingZoneFilesAsync(ct); }
+        catch (Exception ex)
+        {
+            return Ok(new
+            {
+                totalMissingStn = cohort.Count,
+                error = $"Could not read landing-zone for source-row comparison: {ex.Message}",
+                students = cohort.Select(s => DescribeStnGap(s, byNormalizedName, null, includeNames)).ToList(),
+            });
+        }
+
+        foreach (var file in files)
+        {
+            try
+            {
+                var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+                if (ext is not ".csv" and not ".xlsx") { await file.Content.DisposeAsync(); continue; }
+
+                using var buffer = new MemoryStream();
+                await file.Content.CopyToAsync(buffer, ct);
+                var formFile = new StreamFormFile(buffer.ToArray(), file.Name,
+                    ext == ".csv" ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                var uploadType = DetectUploadType(file.Name);
+                var rows = ext == ".csv" ? await ParseCsvAsync(formFile, ct) : ParseXlsx(formFile);
+
+                foreach (var row in rows)
+                {
+                    var name = ExtractRowNameForDiagnostics(row);
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    // Broad header set — union of the demographics (narrow) and assessment (wide)
+                    // lists, so we can tell "no STN column recognized here" apart from "STN cell
+                    // genuinely blank". Anything picked up must still look like a real STN.
+                    var stn = GetVal(row, "STN", "State_StudentNumber", "Student State ID",
+                        "STUDENTS.State_StudentNumber", "State Student Number", "State ID", "SSID",
+                        "Student State Number", "State Student ID Number", "ILEARN Student ID",
+                        "IREAD Student ID", "Statewide Student ID", "State Student Identifier");
+                    if (stn is not null && !LooksLikeStn(stn)) stn = null;
+                    candidates.Add((name, stn, uploadType, file.Name));
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "stn-diagnostics: failed to parse {File}, skipping", file.Name);
+            }
+            finally
+            {
+                await file.Content.DisposeAsync();
+            }
+        }
+
+        var results = cohort.Select(s => DescribeStnGap(s, byNormalizedName, candidates, includeNames)).ToList();
+        var buckets = results
+            .GroupBy(r => r.Bucket)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        return Ok(new { totalMissingStn = cohort.Count, buckets, students = results });
+    }
+
+    private record StnDiagnosticEntry(
+        string StudentId,
+        string? FullName,
+        string NameFingerprint,
+        string? Grade,
+        string ClassGroup,
+        string Bucket,
+        string? MismatchKind,
+        string? MatchedFileName,
+        string? MatchedUploadType,
+        string? DuplicateStudentId);
+
+    private StnDiagnosticEntry DescribeStnGap(
+        StudentDocument student,
+        Dictionary<string, List<StudentDocument>> byNormalizedName,
+        List<(string Name, string? Stn, string UploadType, string FileName)>? candidates,
+        bool includeNames)
+    {
+        var salt = configuration["Pii:FingerprintSalt"] ?? "lgs-stn-diagnostic-default-salt";
+        var fingerprint = Fingerprint(student.FullName, salt);
+        var normalizedTarget = DiagNormalizeName(student.FullName);
+
+        string bucket;
+        string? mismatchKind = null;
+        string? matchedFileName = null;
+        string? matchedUploadType = null;
+        string? duplicateStudentId = null;
+
+        var duplicate = byNormalizedName.TryGetValue(normalizedTarget, out var sameName)
+            ? sameName.FirstOrDefault(other => other.StudentId != student.StudentId && !string.IsNullOrWhiteSpace(other.Stn))
+            : null;
+
+        if (duplicate is not null)
+        {
+            bucket = "DUPLICATE_HOLDS_STN";
+            duplicateStudentId = duplicate.StudentId;
+        }
+        else if (candidates is null)
+        {
+            // Landing-zone couldn't be read at all — distinct from a genuine NO_SOURCE_ROW
+            // coverage gap, which means "checked and found nothing."
+            bucket = "SOURCE_UNAVAILABLE";
+        }
+        else
+        {
+            // Note: FirstOrDefault() on a non-nullable value tuple returns a default(all-null)
+            // tuple rather than a true null when nothing matches, which would make an "is null"
+            // check below always false. Project through a Nullable<> tuple first so an empty
+            // result is a genuine null.
+            // Exact-normalized match first (covers apostrophe/accent/whitespace-only differences).
+            var exactMatch = candidates?
+                .Where(c => DiagNormalizeName(c.Name) == normalizedTarget)
+                .Select(c => ((string Name, string? Stn, string UploadType, string FileName)?)c)
+                .FirstOrDefault();
+            // Fall back to a token-subset match (e.g. a middle name present in one source but not
+            // the other) only when no exact-normalized match exists.
+            var subsetMatch = exactMatch is null
+                ? candidates?
+                    .Where(c => IsTokenSubsetMatch(c.Name, student.FullName))
+                    .Select(c => ((string Name, string? Stn, string UploadType, string FileName)?)c)
+                    .FirstOrDefault()
+                : null;
+            var match = exactMatch ?? subsetMatch;
+
+            if (match is { } m)
+            {
+                matchedFileName = m.FileName;
+                matchedUploadType = m.UploadType;
+                if (!string.IsNullOrWhiteSpace(m.Stn))
+                {
+                    bucket = "SOURCE_NEAR_MISS";
+                    mismatchKind = exactMatch is not null
+                        ? ClassifyNameMismatch(m.Name, student.FullName)
+                        : "TokenSubset";
+                }
+                else
+                {
+                    bucket = "SOURCE_ROW_NO_STN";
+                }
+            }
+            else
+            {
+                bucket = "NO_SOURCE_ROW";
+            }
+        }
+
+        return new StnDiagnosticEntry(
+            StudentId: student.StudentId,
+            FullName: includeNames ? student.FullName : null,
+            NameFingerprint: fingerprint,
+            Grade: student.Grade,
+            ClassGroup: student.ClassGroup,
+            Bucket: bucket,
+            MismatchKind: mismatchKind,
+            MatchedFileName: matchedFileName,
+            MatchedUploadType: matchedUploadType,
+            DuplicateStudentId: duplicateStudentId);
+    }
+
+    // ── Diagnostic-only name comparison helpers ──────────────────────────────────────────────────
+    // Scoped to this read-only endpoint. Deliberately does NOT touch the production matching logic
+    // in ProcessRowsAsync (:628-630) or CosmosDbService (:212-225, :299) — those are addressed by a
+    // separate, more carefully tested shared normalizer once the diagnostic results are reviewed.
+
+    // Reproduces the same name-assembly rules as ProcessRowsAsync (:444-466) — combined-name
+    // columns first, then First+Last, then the "Last, First" flip — kept in sync manually since
+    // extracting a shared helper is out of scope for a read-only diagnostic.
+    internal static string? ExtractRowNameForDiagnostics(Dictionary<string, string> row)
+    {
+        var name = GetValExact(row, "FullName", "Full Name", "Name", "Student Name",
+                               "Student Legal Name", "Legal Name");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            var first = GetValExact(row, "First name", "First Name", "Student First Name", "FirstName",
+                                    "Given Name", "Legal First Name", "Student Legal First Name");
+            var last = GetValExact(row, "Last name", "Last Name", "Student Last Name", "LastName",
+                                    "Family Name", "Surname", "Legal Last Name", "Student Legal Last Name");
+            if (!string.IsNullOrWhiteSpace(first) && !string.IsNullOrWhiteSpace(last))
+                name = $"{first} {last}";
+        }
+        if (!string.IsNullOrWhiteSpace(name) && name.Contains(','))
+        {
+            var parts = name.Split(',', 2);
+            if (parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]) && !string.IsNullOrWhiteSpace(parts[1]))
+                name = $"{parts[1].Trim()} {parts[0].Trim()}";
+        }
+        return name;
+    }
+
+    // Folds quote-mark variants, dashes, accents, and whitespace so near-miss spellings compare
+    // equal. Deliberately does not strip apostrophes/hyphens or drop tokens — see NameNormalization
+    // design notes; a diagnostic false-negative (missed near-miss) is far preferable to silently
+    // treating two different students' names as the same.
+    internal static string DiagNormalizeName(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var s = raw.Trim();
+        s = s.Replace('’', '\'').Replace('‘', '\'').Replace('ʼ', '\'').Replace('´', '\'').Replace('`', '\'');
+        s = s.Replace('–', '-').Replace('—', '-').Replace('‑', '-');
+        var formD = s.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder();
+        foreach (var ch in formD)
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark) sb.Append(ch);
+        s = sb.ToString().Normalize(NormalizationForm.FormC);
+        s = Regex.Replace(s, @"\s+", " ").Trim();
+        return s.ToLowerInvariant();
+    }
+
+    // True when the two names share the same first and last token but one has extra token(s)
+    // (e.g. a middle name) the other lacks — "Keiry Marili Melendez Portillo" vs
+    // "Keiry Melendez Portillo". Order-insensitive on the interior tokens only.
+    internal static bool IsTokenSubsetMatch(string? a, string? b)
+    {
+        var tokensA = DiagNormalizeName(a).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var tokensB = DiagNormalizeName(b).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokensA.Length < 2 || tokensB.Length < 2 || tokensA.Length == tokensB.Length) return false;
+        if (tokensA[0] != tokensB[0]) return false; // first name must match
+        if (tokensA[^1] != tokensB[^1]) return false; // last name must match
+        var (shorter, longer) = tokensA.Length < tokensB.Length ? (tokensA, tokensB) : (tokensB, tokensA);
+        return shorter.All(t => longer.Contains(t));
+    }
+
+    // Best-effort explanation of why today's raw comparison at ProcessRowsAsync:628-630
+    // (`OrdinalIgnoreCase.Equals`) would miss two names that DiagNormalizeName treats as identical.
+    internal static string ClassifyNameMismatch(string sourceName, string rosterName)
+    {
+        if (string.Equals(sourceName.Trim(), rosterName.Trim(), StringComparison.OrdinalIgnoreCase))
+            return "AlreadyMatchable"; // normalized-equal AND ordinal-equal — likely a header/upload-type gap, not a name issue
+
+        string QuoteFold(string s) => s.Replace('’', '\'').Replace('‘', '\'').Replace('ʼ', '\'').Replace('´', '\'').Replace('`', '\'');
+        static string CollapseWs(string s) => Regex.Replace(s.Trim(), @"\s+", " ");
+
+        var a = sourceName.Trim();
+        var b = rosterName.Trim();
+        if (string.Equals(QuoteFold(a), QuoteFold(b), StringComparison.OrdinalIgnoreCase)) return "ApostropheForm";
+        if (string.Equals(CollapseWs(a), CollapseWs(b), StringComparison.OrdinalIgnoreCase)) return "Whitespace";
+
+        var da = DiagNormalizeName(a);
+        var db = DiagNormalizeName(b);
+        var accentStrippedA = Regex.Replace(a.Normalize(NormalizationForm.FormD), @"\p{Mn}", "");
+        var accentStrippedB = Regex.Replace(b.Normalize(NormalizationForm.FormD), @"\p{Mn}", "");
+        if (string.Equals(accentStrippedA.Trim(), accentStrippedB.Trim(), StringComparison.OrdinalIgnoreCase)) return "Accent";
+
+        return da == db ? "Combined" : "Other";
+    }
+
+    // Truncated, salted, non-reversible identifier for a name — lets the response correlate
+    // students across a run without ever including or re-deriving the actual name.
+    internal static string Fingerprint(string? name, string salt)
+    {
+        var normalized = DiagNormalizeName(name);
+        var bytes = Encoding.UTF8.GetBytes(salt + "|" + normalized);
+        var hash = SHA256.HashData(bytes);
+        return Convert.ToHexString(hash)[..12].ToLowerInvariant();
+    }
+
     // ── Clean-cutover purge (super-admin only). Irreversible — deletes every student and
     // assessment document so LGS can re-upload source files under the corrected ingest logic
     // without needing a backfill of historical period/date metadata. ──
@@ -623,7 +925,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         student = await cosmos.FindStudentByLocalIdAsync(localId);
                     if (student is null && !string.IsNullOrWhiteSpace(name))
                     {
-                        var (allStudents, _) = await cosmos.ListStudentsAsync(1, 1000, name, null);
+                        // Do not pass `name` as a search filter — ListStudentsAsync uses Contains,
+                        // which can miss or over-filter. Load the roster and exact-match FullName.
+                        var (allStudents, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null);
                         student = allStudents.FirstOrDefault(s =>
                             s.FullName.Equals(name, StringComparison.OrdinalIgnoreCase) && s.IsActive);
                     }
