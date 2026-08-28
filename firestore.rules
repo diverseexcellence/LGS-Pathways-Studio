@@ -24,8 +24,9 @@ service cloud.firestore {
     //   - spedStatus: string (optional)
     //   - ellStatus: string (optional)
     //   - section504: string (optional)
-    //   - tier: string (required, 'Tier 1', 'Tier 2', 'Tier 3', 'Pending', 'Unassigned')
-    //   - tierStatus: string (required, 'Finalized', 'AI Recommended', 'Pending')
+    //   - elaTier: map (required) — { tier: 'Tier 1'|'Tier 2'|'Tier 3'|null, status: 'Finalized'|'System Recommended'|'Pending' }
+    //   - mathTier: map (required) — same shape as elaTier
+    //     ELA and Math are tiered independently; there is no combined overall tier (TR-011).
     //   - lastUpdated: string (optional)
     //
     // Collection: assessments
@@ -96,11 +97,17 @@ service cloud.firestore {
              (!('name' in data) || (data.name is string && data.name.size() < 100));
     }
 
+    function isValidSubjectTier(t) {
+      return t.status in ['Finalized', 'System Recommended', 'Pending'] &&
+             (!('tier' in t) || t.tier == null || t.tier in ['Tier 1', 'Tier 2', 'Tier 3']);
+    }
+
+    // ELA and Math are tiered independently — there is no combined overall student tier (TR-011).
     function isValidStudent(data) {
-      return hasRequiredFields(['stn', 'tier', 'tierStatus']) &&
+      return hasRequiredFields(['stn', 'elaTier', 'mathTier']) &&
              data.stn is string && data.stn.size() > 0 && data.stn.size() < 50 &&
-             data.tier in ['Tier 1', 'Tier 2', 'Tier 3', 'Pending', 'Unassigned'] &&
-             data.tierStatus in ['Finalized', 'AI Recommended', 'System Recommended', 'Pending'] &&
+             isValidSubjectTier(data.elaTier) &&
+             isValidSubjectTier(data.mathTier) &&
              (!('grade' in data) || (data.grade is string && data.grade.size() < 50)) &&
              (!('gender' in data) || (data.gender is string && data.gender.size() < 50)) &&
              (!('ethnicity' in data) || (data.ethnicity is string && data.ethnicity.size() < 100)) &&

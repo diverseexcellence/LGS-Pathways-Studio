@@ -4,17 +4,28 @@ import { AgGridReact } from 'ag-grid-react';
 import { ColDef, GridReadyEvent, IGetRowsParams, GridApi } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
-import { studentsApi, exportApi, Student } from '../lib/api';
+import { studentsApi, exportApi, Student, SubjectTier } from '../lib/api';
 import { Users, Search, RefreshCw, Download } from 'lucide-react';
 
-const TierCell = ({ value }: { value: string }) => {
-  const tier = value || '';
+const SubjectTierCell = ({ value }: { value: SubjectTier | undefined }) => {
+  const tier = value?.tier || '';
   const cls =
     tier === 'Tier 1' ? 'bg-green-100 text-green-700' :
     tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700' :
     tier === 'Tier 3' ? 'bg-red-100 text-red-700' :
     'bg-slate-100 text-slate-600';
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{tier || 'Pending'}</span>;
+  const pendingTitle = value?.status === 'Pending'
+    ? value.pendingReason === 'no_assessments' ? 'No assessment data yet.'
+    : value.pendingReason === 'insufficient_data_points' ? `Only ${value.dataPoints} of the required data points are available.`
+    : value.pendingReason === 'all_evidence_excluded' ? 'Assessment data present but none of it is usable evidence.'
+    : 'Pending / Review — not enough evidence for an automatic tier.'
+    : undefined;
+  return (
+    <span className="inline-flex items-center gap-1.5" title={pendingTitle}>
+      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{tier || 'Pending'}</span>
+      {value?.score != null && <span className="text-xs text-slate-400">{value.score.toFixed(2)}</span>}
+    </span>
+  );
 };
 
 const StatusCell = ({ value }: { value: boolean }) => (
@@ -60,13 +71,22 @@ export default function StudentsList() {
       minWidth: 80,
     },
     {
-      field: 'tier',
-      headerName: 'Tier',
+      field: 'elaTier',
+      headerName: 'ELA Tier',
       sortable: true,
       filter: true,
       flex: 1,
-      minWidth: 100,
-      cellRenderer: (params: any) => <TierCell value={params.value} />,
+      minWidth: 110,
+      cellRenderer: (params: any) => <SubjectTierCell value={params.value} />,
+    },
+    {
+      field: 'mathTier',
+      headerName: 'Math Tier',
+      sortable: true,
+      filter: true,
+      flex: 1,
+      minWidth: 110,
+      cellRenderer: (params: any) => <SubjectTierCell value={params.value} />,
     },
     {
       field: 'isActive',

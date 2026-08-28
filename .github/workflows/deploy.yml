@@ -14,9 +14,26 @@ env:
   FRONTEND_APP_NAME: 'web-lgsi-dev'
 
 jobs:
+  # ─── Tests ──────────────────────────────────────────────────────────────────
+  test:
+    name: Run backend tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Test
+        run: dotnet test backend.Tests/LgsImpact.Api.Tests.csproj -c Release
+
   # ─── Backend ────────────────────────────────────────────────────────────────
   backend:
     name: Build & Deploy API
+    needs: test
     runs-on: ubuntu-latest
     defaults:
       run:

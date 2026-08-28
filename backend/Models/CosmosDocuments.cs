@@ -43,17 +43,19 @@ public class StudentDocument
     [JsonProperty("homeRoom")]
     public string? HomeRoom { get; set; }
 
-    /// <summary>Tier value: "1", "2", "3", or "Pending".</summary>
-    [JsonProperty("tier")]
-    public string Tier { get; set; } = "Pending";
+    /// <summary>ELA subject-level tier recommendation. Independent of Math — see TR-011 (no combined tier).</summary>
+    [JsonProperty("elaTier")]
+    public SubjectTier ElaTier { get; set; } = new();
 
-    /// <summary>Workflow state: "Pending" | "System Recommended" | "Finalized".</summary>
-    [JsonProperty("tierStatus")]
-    public string TierStatus { get; set; } = "Pending";
+    /// <summary>Math subject-level tier recommendation. Independent of ELA — see TR-011 (no combined tier).</summary>
+    [JsonProperty("mathTier")]
+    public SubjectTier MathTier { get; set; } = new();
 
-    /// <summary>BRD G8: reason code when tier cannot be computed ("no_assessments" | "no_proficiency_or_percentile").</summary>
-    [JsonProperty("tierPendingReason")]
-    public string? TierPendingReason { get; set; }
+    [JsonIgnore]
+    public bool AllSubjectsFinalized => ElaTier.Status == "Finalized" && MathTier.Status == "Finalized";
+
+    [JsonIgnore]
+    public bool AnySubjectFinalized => ElaTier.Status == "Finalized" || MathTier.Status == "Finalized";
 
     [JsonProperty("isActive")]
     public bool IsActive { get; set; } = true;
@@ -117,6 +119,102 @@ public class AssessmentDocument
 
     [JsonProperty("rawFields")]
     public Dictionary<string, string> RawFields { get; set; } = new();
+
+    /// <summary>Original, un-normalized period column/filename value. Never overwritten — lets a
+    /// bad normalization be corrected without losing the source data.</summary>
+    [JsonProperty("periodRaw")]
+    public string? PeriodRaw { get; set; }
+
+    /// <summary>Parsed "yyyy-MM-dd" form of <see cref="Date"/>, resolved with per-source format
+    /// knowledge. Used for chronological ordering — never sort on the raw <see cref="Date"/> string.</summary>
+    [JsonProperty("dateIso")]
+    public string? DateIso { get; set; }
+
+    /// <summary>True when the day/month order in <see cref="Date"/> was ambiguous (both segments
+    /// &lt;= 12) and a best-guess format was assumed.</summary>
+    [JsonProperty("dateAmbiguous")]
+    public bool DateAmbiguous { get; set; }
+}
+
+/// <summary>Subject-level tier recommendation (ELA or Math). Two of these live on a
+/// <see cref="StudentDocument"/> — there is no combined overall tier (TR-011).</summary>
+public class SubjectTier
+{
+    /// <summary>"Tier 1" | "Tier 2" | "Tier 3" | null when Pending.</summary>
+    [JsonProperty("tier")]
+    public string? Tier { get; set; }
+
+    /// <summary>Workflow state: "Pending" | "System Recommended" | "Finalized".</summary>
+    [JsonProperty("status")]
+    public string Status { get; set; } = "Pending";
+
+    /// <summary>Weighted performance score, 0.00-3.00. Populated even while Pending once at least
+    /// one data point counts, so the profile can show a provisional number.</summary>
+    [JsonProperty("score")]
+    public double? Score { get; set; }
+
+    /// <summary>Count of evidence records that counted toward the score.</summary>
+    [JsonProperty("dataPoints")]
+    public int DataPoints { get; set; }
+
+    /// <summary>"no_assessments" | "insufficient_data_points" | "all_evidence_excluded" — set only while Pending.</summary>
+    [JsonProperty("pendingReason")]
+    public string? PendingReason { get; set; }
+
+    /// <summary>Deterministic, human-readable explanation of the calculation, versioned by ruleset.</summary>
+    [JsonProperty("reasoning")]
+    public string? Reasoning { get; set; }
+
+    [JsonProperty("rulesetVersion")]
+    public string? RulesetVersion { get; set; }
+
+    [JsonProperty("computedAt")]
+    public string? ComputedAt { get; set; }
+
+    [JsonProperty("overriddenBy")]
+    public string? OverriddenBy { get; set; }
+
+    [JsonProperty("overriddenAt")]
+    public string? OverriddenAt { get; set; }
+
+    /// <summary>Full evidence trail: every candidate record considered, whether it counted, and why
+    /// not when it didn't. Capped to a reasonable size before persisting.</summary>
+    [JsonProperty("evidence", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<TierEvidenceRecord> Evidence { get; set; } = new();
+}
+
+public class TierEvidenceRecord
+{
+    [JsonProperty("assessmentId")]
+    public string AssessmentId { get; set; } = "";
+
+    /// <summary>ILEARN | IXL | Acadience | IREAD (the assessment's UploadType).</summary>
+    [JsonProperty("source")]
+    public string Source { get; set; } = "";
+
+    /// <summary>CP1 | CP2 | CP3 | SPRING | BOY | MOY | EOY | null when unresolved.</summary>
+    [JsonProperty("period")]
+    public string? Period { get; set; }
+
+    /// <summary>Raw performance-level label as stored on the assessment.</summary>
+    [JsonProperty("category")]
+    public string? Category { get; set; }
+
+    [JsonProperty("value")]
+    public int? Value { get; set; }
+
+    [JsonProperty("weight")]
+    public double? Weight { get; set; }
+
+    [JsonProperty("date")]
+    public string? Date { get; set; }
+
+    [JsonProperty("counted")]
+    public bool Counted { get; set; }
+
+    /// <summary>"source_excluded" | "unrecognized_category" | "unknown_period" | "unknown_subject" | "superseded".</summary>
+    [JsonProperty("exclusionReason")]
+    public string? ExclusionReason { get; set; }
 }
 
 public class AiSummaryDocument
@@ -291,6 +389,15 @@ public class TargetGoalDocument
     public string? UpdatedBy { get; set; }
 }
 
+public record TierThreshold(
+    [property: JsonProperty("tier")] string Tier,
+    [property: JsonProperty("minScoreInclusive")] double MinScoreInclusive);
+
+/// <summary>
+/// Per-subject weighted tier calculation ruleset (LGS Tier Recommendation Logic Requirements,
+/// updated version). Every weight, category mapping, and threshold used by
+/// <c>TierCalculationService</c> lives here so LGS can adjust the model without a redeploy.
+/// </summary>
 public class TierRulesetConfigDocument
 {
     [JsonProperty("id")]
@@ -300,24 +407,146 @@ public class TierRulesetConfigDocument
     public string PartitionKey { get; set; } = "config";
 
     [JsonProperty("rulesetVersion")]
-    public string RulesetVersion { get; set; } = "1.0";
-
-    [JsonProperty("percentileCutoff")]
-    public int PercentileCutoff { get; set; } = 40;
+    public string RulesetVersion { get; set; } = "2.0";
 
     [JsonProperty("effectiveDate")]
-    public string EffectiveDate { get; set; } = "2026-06-12";
+    public string EffectiveDate { get; set; } = "2026-08-27";
 
     [JsonProperty("description")]
     public string Description { get; set; } =
-        "Tier 1 = On/Above in both ELA and Math. Tier 2 = mixed. Tier 3 = Below in both. " +
-        "Percentile cutoff: ≥40 = On/Above. K–2: Reading proxies missing ELA/Math signals.";
+        "Weighted per-subject tiering (ELA and Math calculated independently; no combined overall " +
+        "tier). Score = Σ(performance value 0-3 × evidence weight) ÷ Σ(available evidence weights). " +
+        "Missing evidence is excluded from both sums, never coerced to 0. Minimum 2 counted data " +
+        "points per subject for automatic tiering, else Pending / Review.";
+
+    // ── DEPRECATED — kept only so a v1.0 config document round-trips; unused by the v2 engine. ──
+    [JsonProperty("percentileCutoff")]
+    public int PercentileCutoff { get; set; } = 40;
+
+    /// <summary>source (UploadType) -&gt; canonicalised category label -&gt; normalized value 0-3.</summary>
+    [JsonProperty("categoryValues", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public Dictionary<string, Dictionary<string, int>> CategoryValues { get; set; } = DefaultCategoryValues();
+
+    /// <summary>Category labels recognised for every source, checked after the source-specific map.</summary>
+    [JsonProperty("sharedCategoryValues", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public Dictionary<string, int> SharedCategoryValues { get; set; } = DefaultSharedCategoryValues();
+
+    /// <summary>source -&gt; period key ("CP1", "BOY", "*", ...) -&gt; evidence weight.</summary>
+    [JsonProperty("evidenceWeights", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public Dictionary<string, Dictionary<string, double>> EvidenceWeights { get; set; } = DefaultEvidenceWeights();
+
+    /// <summary>Sources excluded from the weighted calculation entirely (AC-09: IREAD). Evidence
+    /// from an excluded source is still recorded on the profile as display-only.</summary>
+    [JsonProperty("excludedSources", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<string> ExcludedSources { get; set; } = new() { "IREAD" };
+
+    /// <summary>source (UploadType) -&gt; subject it always contributes to, overriding whatever the
+    /// stored Subject column says (Acadience always contributes to ELA/Reading — §3, §5.3).</summary>
+    [JsonProperty("sourceSubjectOverrides", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public Dictionary<string, string> SourceSubjectOverrides { get; set; } = new() { ["Acadience"] = "ELA" };
+
+    /// <summary>Checked in descending MinScoreInclusive order; first match wins.</summary>
+    [JsonProperty("tierThresholds", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+    public List<TierThreshold> TierThresholds { get; set; } = new()
+    {
+        new("Tier 1", 2.00),
+        new("Tier 2", 1.00),
+        new("Tier 3", 0.00),
+    };
+
+    /// <summary>Minimum counted data points per subject for automatic tiering (TR-009, AC-10).</summary>
+    [JsonProperty("minDataPoints")]
+    public int MinDataPoints { get; set; } = 2;
+
+    [JsonProperty("scoreDecimals")]
+    public int ScoreDecimals { get; set; } = 2;
+
+    /// <summary>Weight applied when a record's period cannot be resolved. Null (default) means such
+    /// evidence is excluded — it is never silently given a weight of 1.0.</summary>
+    [JsonProperty("unknownPeriodWeight")]
+    public double? UnknownPeriodWeight { get; set; } = null;
+
+    /// <summary>TR-003 removes the percentile fallback used by the old engine. Kept as an opt-in
+    /// escape hatch; default false.</summary>
+    [JsonProperty("percentileFallbackEnabled")]
+    public bool PercentileFallbackEnabled { get; set; } = false;
+
+    /// <summary>When true, an IXL record with no explicit BOY/MOY/EOY token falls back to a
+    /// month-of-test-date window (§4b). Default off pending LGS confirmation (C-04).</summary>
+    [JsonProperty("ixlPeriodFromDateFallback")]
+    public bool IxlPeriodFromDateFallback { get; set; } = false;
 
     [JsonProperty("updatedAt")]
     public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
 
     [JsonProperty("updatedBy")]
     public string? UpdatedBy { get; set; }
+
+    public static Dictionary<string, Dictionary<string, int>> DefaultCategoryValues() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ILEARN"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["below proficiency"] = 0,
+            ["approaching proficiency"] = 1,
+            ["at proficiency"] = 2,
+            ["above proficiency"] = 3,
+        },
+        ["IXL"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["far below grade"] = 0,
+            ["far below grade level"] = 0,
+            ["below grade"] = 1,
+            ["below grade level"] = 1,
+            ["on grade"] = 2,
+            ["on grade level"] = 2,
+            ["above grade"] = 3,
+            ["above grade level"] = 3,
+        },
+        ["Acadience"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["well below benchmark"] = 0,
+            ["below benchmark"] = 1,
+            ["at benchmark"] = 2,
+            ["above benchmark"] = 3,
+        },
+    };
+
+    public static Dictionary<string, int> DefaultSharedCategoryValues() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["below"] = 0,
+        ["far below"] = 0,
+        ["did not meet"] = 0,
+        ["approaching"] = 1,
+        ["at"] = 2,
+        ["on"] = 2,
+        ["meets"] = 2,
+        ["above"] = 3,
+        ["exceeds"] = 3,
+    };
+
+    public static Dictionary<string, Dictionary<string, double>> DefaultEvidenceWeights() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ILEARN"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CP1"] = 1.0,
+            ["CP2"] = 1.5,
+            ["CP3"] = 2.0,
+            ["SPRING"] = 2.5,
+        },
+        ["IXL"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["BOY"] = 1.0,
+            ["MOY"] = 1.5,
+            ["EOY"] = 2.0,
+        },
+        ["Acadience"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["BOY"] = 1.0,
+            ["MOY"] = 1.0,
+            ["EOY"] = 1.0,
+            ["*"] = 1.0,
+        },
+    };
 }
 
 public class CollaborationNoteDocument

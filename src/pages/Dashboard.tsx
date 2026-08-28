@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TrendingUp, Award, Users, Target, Info, ChevronRight, ChevronLeft, Pencil, Check, X, Download } from 'lucide-react';
-import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis, GradeProficiencyRow, GeoZipRow } from '../lib/api';
+import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis, GradeProficiencyRow, GeoZipRow, TierSubject } from '../lib/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
@@ -34,7 +34,7 @@ function normalizeGradeLabel(raw: string | number): string {
   return cleaned.replace(/^0+(?=\d)/, '');
 }
 
-function buildStats(students: Student[]): Stats {
+function buildStats(students: Student[], subject: TierSubject): Stats {
   let t1 = 0, t2 = 0, t3 = 0;
   const gradeMap: Record<string, { proficient: number; developing: number; critical: number }> = {};
   const homeRoomMap: Record<string, { tier1: number; tier2: number; tier3: number }> = {};
@@ -43,13 +43,16 @@ function buildStats(students: Student[]): Stats {
   const activeCaseload = students.filter(s => s.isActive).length;
 
   for (const s of students) {
-    const tier = s.tier || 'Pending';
-    const tierStatus = s.tierStatus || 'Pending';
+    const subjectTier = subject === 'math' ? s.mathTier : s.elaTier;
+    const tier = subjectTier?.tier || 'Pending';
+    const tierStatus = subjectTier?.status || 'Pending';
     const grade = s.grade ? `Grade ${normalizeGradeLabel(s.grade)}` : 'Unknown';
     const homeRoom = s.homeRoom || s.classGroup || 'Unassigned';
 
-    // BRD DB-4: only Finalized students count in tier distribution aggregations
-    if (tierStatus !== 'Finalized') continue;
+    // Include any subject that has a system recommendation or has been finalized — gating to
+    // Finalized-only would show zero for every chart until every student's subject is
+    // individually finalized by an admin.
+    if (tierStatus === 'Pending') continue;
 
     if (tier === 'Tier 1') t1++;
     else if (tier === 'Tier 2') t2++;
@@ -126,14 +129,26 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const dashboardRef = useRef<HTMLDivElement>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
-  const [stats, setStats] = useState<Stats>({
+
+  // ELA/Math toggle drives the tier-based charts (donut, grade/teacher tables, homeroom bar, ZIP
+  // map). Duplicating all five panels per subject would roughly double the page and break the
+  // single-image PDF export, so a single selector switches them instead — except the donut, shown
+  // as two compact side-by-side charts since comparing the two distributions at a glance is the
+  // main reason a per-subject tier was requested.
+  const [tierSubject, setTierSubject] = useState<TierSubject>('ela');
+  const allStudentsRef = useRef<Student[]>([]);
+
+  const emptyStats: Stats = {
     tier1Pct: 0, tier2Pct: 0, tier3Pct: 0,
     tier1Count: 0, tier2Count: 0, tier3Count: 0,
     totalStudents: 0,
     activeCaseload: 0,
     gradeData: [],
     homeRoomData: [],
-  });
+  };
+  const [elaStats, setElaStats] = useState<Stats>(emptyStats);
+  const [mathStats, setMathStats] = useState<Stats>(emptyStats);
+  const stats = tierSubject === 'math' ? mathStats : elaStats;
   const [loadingStats, setLoadingStats] = useState(true);
 
   // KPIs (real data)
@@ -177,7 +192,9 @@ export default function Dashboard() {
           allStudents.push(...rest.flatMap(r => r.items));
         }
 
-        setStats(buildStats(allStudents));
+        allStudentsRef.current = allStudents;
+        setElaStats(buildStats(allStudents, 'ela'));
+        setMathStats(buildStats(allStudents, 'math'));
       } catch (e) {
         console.error('Dashboard stats fetch failed', e);
       } finally {
@@ -192,15 +209,6 @@ export default function Dashboard() {
         setGoalInput(String(cfg.goalPct));
       } catch {
         // use default 85
-      }
-    }
-
-    async function fetchGrades() {
-      try {
-        const rows = await dashboardApi.byGrade();
-        setGradeRows(rows);
-      } catch (e) {
-        console.error('Grade drill-down fetch failed', e);
       }
     }
 
@@ -260,18 +268,29 @@ export default function Dashboard() {
 
     fetchAll();
     fetchConfig();
-    fetchGrades();
     fetchKpis();
     fetchTimeline();
     fetchGradeProficiency();
     fetchGeographic();
   }, []);
 
+  // Refetch the grade breakdown, and reset the drill-down to the top level, whenever the
+  // ELA/Math toggle changes — a teacher/student drill-down for the previous subject would
+  // otherwise keep showing stale tier counts under the new subject.
+  useEffect(() => {
+    let cancelled = false;
+    setDrillView({ level: 'grades' });
+    dashboardApi.byGrade(tierSubject)
+      .then(rows => { if (!cancelled) setGradeRows(rows); })
+      .catch(e => console.error('Grade drill-down fetch failed', e));
+    return () => { cancelled = true; };
+  }, [tierSubject]);
+
   async function drillToTeachers(grade: string) {
     setLoadingDrill(true);
     setDrillView({ level: 'teachers', grade });
     try {
-      const rows = await dashboardApi.teachersByGrade(grade);
+      const rows = await dashboardApi.teachersByGrade(grade, tierSubject);
       setTeacherRows(rows);
     } finally {
       setLoadingDrill(false);
@@ -345,11 +364,13 @@ export default function Dashboard() {
     }
   }
 
-  const donutData = [
-    { name: 'Tier 1', value: stats.tier1Pct, count: stats.tier1Count, color: '#214965' },
-    { name: 'Tier 2', value: stats.tier2Pct, count: stats.tier2Count, color: '#9ca3af' },
-    { name: 'Tier 3', value: stats.tier3Pct, count: stats.tier3Count, color: '#b91c1c' },
+  const buildDonutData = (s: Stats) => [
+    { name: 'Tier 1', value: s.tier1Pct, count: s.tier1Count, color: '#214965' },
+    { name: 'Tier 2', value: s.tier2Pct, count: s.tier2Count, color: '#9ca3af' },
+    { name: 'Tier 3', value: s.tier3Pct, count: s.tier3Count, color: '#b91c1c' },
   ];
+  const elaDonutData = buildDonutData(elaStats);
+  const mathDonutData = buildDonutData(mathStats);
 
   const tierColor: Record<string, string> = { 'Tier 1': 'text-lgs-blue bg-blue-50', 'Tier 2': 'text-slate-600 bg-slate-100', 'Tier 3': 'text-red-700 bg-red-50' };
 
@@ -459,28 +480,44 @@ export default function Dashboard() {
               <Users className="w-5 h-5 text-lgs-red" />
               Tier Distribution
             </h2>
-            <p className="text-sm text-slate-500 mt-1">Distribution of finalized students across support tiers.</p>
+            {/* Two subject tiers are calculated independently (TR-011) — shown side by side so
+                ELA and Math distributions can be compared at a glance, which is the primary
+                reason a per-subject tier was requested. Includes System Recommended tiers. */}
+            <p className="text-sm text-slate-500 mt-1">ELA vs. Math tier distribution across recommended and finalized students.</p>
           </div>
-          <div className="flex-1 min-h-[200px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={donutData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={2} dataKey="value" stroke="none">
-                  {donutData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
-                </Pie>
-                <RechartsTooltip formatter={(v: number, name: string, p: any) => [`${v}% (${p.payload.count} students)`, name]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="space-y-3 mt-4">
-            {donutData.map(item => (
-              <div key={item.name} className="flex items-center justify-between text-sm font-bold">
-                <div className="flex items-center gap-2 text-lgs-blue">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }} />
-                  {item.name}
+          <div className="flex-1 grid grid-cols-2 gap-2 min-h-[180px]">
+            {([['ELA', elaDonutData], ['Math', mathDonutData]] as const).map(([label, data]) => (
+              <div key={label} className="flex flex-col">
+                <p className="text-center text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">{label}</p>
+                <div className="flex-1">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={data} cx="50%" cy="50%" innerRadius={38} outerRadius={54} paddingAngle={2} dataKey="value" stroke="none">
+                        {data.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+                      </Pie>
+                      <RechartsTooltip formatter={(v: number, name: string, p: any) => [`${v}% (${p.payload.count} students)`, name]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
                 </div>
-                <div className="text-lgs-blue">{item.value}% <span className="text-slate-400 font-normal ml-1">({item.count})</span></div>
               </div>
             ))}
+          </div>
+          <div className="space-y-2 mt-4">
+            {(['Tier 1', 'Tier 2', 'Tier 3'] as const).map(tierName => {
+              const ela = elaDonutData.find(d => d.name === tierName)!;
+              const math = mathDonutData.find(d => d.name === tierName)!;
+              return (
+                <div key={tierName} className="flex items-center justify-between text-xs font-bold">
+                  <div className="flex items-center gap-2 text-lgs-blue">
+                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: ela.color }} />
+                    {tierName}
+                  </div>
+                  <div className="text-lgs-blue">
+                    ELA {ela.count} <span className="text-slate-400 font-normal">·</span> Math {math.count}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -514,22 +551,24 @@ export default function Dashboard() {
 
       {/* Grade → Teacher → Student drill-down */}
       <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
-        <div className="mb-4 flex items-center gap-3">
-          {drillView.level !== 'grades' && (
-            <button onClick={() => backToDrillLevel(drillView.level === 'students' ? 'teachers' : 'grades')} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-lgs-blue transition-colors">
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-          )}
-          <div>
-            <h2 className="text-lg font-bold text-lgs-blue uppercase tracking-wide flex items-center gap-2">
-              <Users className="w-5 h-5 text-slate-400" />
-              {drillView.level === 'grades' && 'Grade Breakdown'}
-              {drillView.level === 'teachers' && `Grade ${(drillView as any).grade} — By Teacher`}
-              {drillView.level === 'students' && `Grade ${(drillView as any).grade} — Students`}
-            </h2>
-            {/* Counts here reflect Finalized-tier students only, per BRD DB-4 — distinct from the
-                Active Caseload KPI above, which counts all active students regardless of tier status. */}
-            <p className="text-xs text-slate-400 -mt-0.5 mb-1">Finalized students only</p>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            {drillView.level !== 'grades' && (
+              <button onClick={() => backToDrillLevel(drillView.level === 'students' ? 'teachers' : 'grades')} className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-lgs-blue transition-colors">
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+            )}
+            <div>
+              <h2 className="text-lg font-bold text-lgs-blue uppercase tracking-wide flex items-center gap-2">
+                <Users className="w-5 h-5 text-slate-400" />
+                {drillView.level === 'grades' && 'Grade Breakdown'}
+                {drillView.level === 'teachers' && `Grade ${(drillView as any).grade} — By Teacher`}
+                {drillView.level === 'students' && `Grade ${(drillView as any).grade} — Students`}
+              </h2>
+              {/* Math and ELA tiers are calculated and finalized independently (TR-011) — this
+                  section, the homeroom bar, and the ZIP map all reflect whichever subject is
+                  selected below. Includes System Recommended tiers, not just Finalized ones. */}
+              <p className="text-xs text-slate-400 -mt-0.5 mb-1">{tierSubject === 'math' ? 'Math' : 'ELA'} tier — system-recommended or finalized</p>
             {/* Breadcrumb */}
             <p className="text-sm text-slate-500 flex items-center gap-1 mt-0.5">
               <span
@@ -552,6 +591,22 @@ export default function Dashboard() {
                 </>
               )}
             </p>
+            </div>
+          </div>
+
+          {/* ELA/Math toggle — drives this table, the homeroom bar, and the ZIP map below */}
+          <div className="flex rounded-lg border border-slate-200 bg-white p-0.5 shrink-0" data-pdf-exclude="true">
+            {(['ela', 'math'] as TierSubject[]).map(subj => (
+              <button
+                key={subj}
+                onClick={() => setTierSubject(subj)}
+                className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wide rounded-md transition-colors ${
+                  tierSubject === subj ? 'bg-lgs-blue text-white' : 'text-slate-500 hover:text-lgs-blue'
+                }`}
+              >
+                {subj === 'ela' ? 'ELA' : 'Math'}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -634,16 +689,20 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {drillStudents.map(s => (
-                  <tr key={s.studentId} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => navigate(`/students/${s.studentId}`)}>
-                    <td className="py-3 pr-4 font-semibold text-lgs-blue">{s.fullName}</td>
-                    <td className="py-3 pr-4 text-slate-500">{s.classGroup || '—'}</td>
-                    <td className="py-3 pr-4">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${tierColor[s.tier] ?? 'text-slate-400 bg-slate-100'}`}>{s.tier}</span>
-                    </td>
-                    <td className="py-3 text-slate-500 text-xs">{s.tierStatus}</td>
-                  </tr>
-                ))}
+                {drillStudents.map(s => {
+                  const tier = tierSubject === 'math' ? s.mathTier : s.elaTier;
+                  const status = tierSubject === 'math' ? s.mathTierStatus : s.elaTierStatus;
+                  return (
+                    <tr key={s.studentId} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => navigate(`/students/${s.studentId}`)}>
+                      <td className="py-3 pr-4 font-semibold text-lgs-blue">{s.fullName}</td>
+                      <td className="py-3 pr-4 text-slate-500">{s.classGroup || '—'}</td>
+                      <td className="py-3 pr-4">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${tierColor[tier ?? ''] ?? 'text-slate-400 bg-slate-100'}`}>{tier || 'Pending'}</span>
+                      </td>
+                      <td className="py-3 text-slate-500 text-xs">{status}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )
@@ -659,7 +718,7 @@ export default function Dashboard() {
                 <Users className="w-5 h-5 text-slate-400" />
                 Caseload by Home Room
               </h2>
-              <p className="text-sm text-slate-500 mt-1">Distribution of Tier 1 / Tier 2 / Tier 3 students per homeroom teacher.</p>
+              <p className="text-sm text-slate-500 mt-1">Distribution of {tierSubject === 'math' ? 'Math' : 'ELA'} Tier 1 / Tier 2 / Tier 3 students per homeroom teacher.</p>
             </div>
             <div className="h-[400px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -684,7 +743,7 @@ export default function Dashboard() {
               <Target className="w-5 h-5 text-slate-400" />
               Geographic Distribution
             </h2>
-            <p className="text-sm text-slate-500 mt-1">Student tier distribution by ZIP code. Circle size reflects student count; color reflects tier mix.</p>
+            <p className="text-sm text-slate-500 mt-1">{tierSubject === 'math' ? 'Math' : 'ELA'} tier distribution by ZIP code. Circle size reflects student count; color reflects tier mix.</p>
           </div>
           <div className="h-[400px] relative rounded-xl overflow-hidden border border-slate-200 z-0">
             <MapContainer center={defaultCenter} zoom={10} style={{ height: '100%', width: '100%' }}>
@@ -692,27 +751,32 @@ export default function Dashboard() {
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
-              {geoData.map(row => (
-                <CircleMarker
-                  key={row.zip}
-                  center={[row.lat, row.lng]}
-                  radius={Math.max(6, Math.min(30, row.total * 1.5))}
-                  pathOptions={{
-                    color: row.tier3 > row.tier1 ? '#b91c1c' : '#214965',
-                    fillColor: row.tier3 > row.tier1 ? '#b91c1c' : '#214965',
-                    fillOpacity: 0.6,
-                    weight: 1,
-                  }}
-                >
-                  <Popup>
-                    <div className="text-sm">
-                      <p className="font-semibold mb-1">ZIP: {row.zip}</p>
-                      <p>Total students: {row.total}</p>
-                      <p>Tier 1: {row.tier1} &nbsp; Tier 2: {row.tier2} &nbsp; Tier 3: {row.tier3}</p>
-                    </div>
-                  </Popup>
-                </CircleMarker>
-              ))}
+              {geoData.map(row => {
+                const tier1 = tierSubject === 'math' ? row.mathTier1 : row.elaTier1;
+                const tier2 = tierSubject === 'math' ? row.mathTier2 : row.elaTier2;
+                const tier3 = tierSubject === 'math' ? row.mathTier3 : row.elaTier3;
+                return (
+                  <CircleMarker
+                    key={row.zip}
+                    center={[row.lat, row.lng]}
+                    radius={Math.max(6, Math.min(30, row.total * 1.5))}
+                    pathOptions={{
+                      color: tier3 > tier1 ? '#b91c1c' : '#214965',
+                      fillColor: tier3 > tier1 ? '#b91c1c' : '#214965',
+                      fillOpacity: 0.6,
+                      weight: 1,
+                    }}
+                  >
+                    <Popup>
+                      <div className="text-sm">
+                        <p className="font-semibold mb-1">ZIP: {row.zip}</p>
+                        <p>Total students: {row.total}</p>
+                        <p>{tierSubject === 'math' ? 'Math' : 'ELA'} — Tier 1: {tier1} &nbsp; Tier 2: {tier2} &nbsp; Tier 3: {tier3}</p>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
               {geoData.length > 0 && <GeoMapFitBounds data={geoData} />}
             </MapContainer>
           </div>

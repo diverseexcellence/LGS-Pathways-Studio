@@ -13,7 +13,7 @@ namespace LgsImpact.Api.Controllers;
 [ApiController]
 [Route("api/upload")]
 [Authorize]
-public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction, ISchoolAverageService schoolAverages, ITierCalculationService tierCalculation) : ControllerBase
+public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob, IAuditService audit, IPiiRedactionService piiRedaction, ISchoolAverageService schoolAverages, ITierCalculationService tierCalculation, ILogger<UploadController> logger) : ControllerBase
 {
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
@@ -84,12 +84,22 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         _ = Task.Run(() => schoolAverages.RefreshAsync());
 
         // Recompute tier recommendations for all active students after any upload
-        // (demographics adds new students; assessments change available signals)
+        // (demographics adds new students; assessments change available signals). Batched: fetches
+        // all assessments and the ruleset once instead of once per student, and per-subject
+        // Finalized gating happens inside the engine, so a student with one Finalized subject still
+        // gets the other subject recalculated.
         _ = Task.Run(async () =>
         {
-            var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
-            foreach (var student in students.Where(s => s.TierStatus != TierStatus.Finalized))
-                await tierCalculation.ComputeAndApplyAsync(student);
+            try
+            {
+                var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
+                var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsFinalized).ToList());
+                logger.LogInformation("Post-upload tier recalculation updated {Count} of {Total} students", updated, students.Count);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Post-upload tier recalculation failed");
+            }
         });
 
         return Ok(result);
@@ -190,13 +200,25 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             }
         }
 
-        // Refresh school averages and recompute tiers for all non-Finalized students
-        _ = Task.Run(() => schoolAverages.RefreshAsync());
+        // Refresh school averages and recompute tiers for all students with at least one
+        // non-Finalized subject.
         _ = Task.Run(async () =>
         {
-            var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
-            foreach (var student in students.Where(s => s.TierStatus != TierStatus.Finalized))
-                await tierCalculation.ComputeAndApplyAsync(student);
+            try { await schoolAverages.RefreshAsync(); }
+            catch (Exception ex) { logger.LogError(ex, "School average refresh failed after landing-zone import"); }
+        });
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
+                var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsFinalized).ToList());
+                logger.LogInformation("Landing-zone tier recalculation updated {Count} of {Total} students", updated, students.Count);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Landing-zone tier recalculation failed");
+            }
         });
 
         return Ok(new { message = $"Processed {files.Count} file(s) from landing-zone.", results });
@@ -248,11 +270,69 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     public async Task<IActionResult> RecalculateTiers()
     {
         var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
-        var eligible = students.Where(s => s.TierStatus != TierStatus.Finalized).ToList();
-        foreach (var student in eligible)
-            await tierCalculation.ComputeAndApplyAsync(student);
-        return Ok(new { message = $"Tier recalculation complete.", processed = eligible.Count });
+        var eligible = students.Where(s => !s.AllSubjectsFinalized).ToList();
+        var updated = await tierCalculation.ComputeAndApplyBatchAsync(eligible);
+        return Ok(new { message = "Tier recalculation complete.", processed = eligible.Count, updated });
     }
+
+    // ── Data quality: why is a student Pending? Also the migration decision tool after re-upload. ──
+    [HttpGet("tier-data-quality")]
+    public async Task<IActionResult> TierDataQuality()
+    {
+        var (students, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
+        var report = students.Select(s => new
+        {
+            studentId = s.StudentId,
+            fullName = s.FullName,
+            ela = new
+            {
+                status = s.ElaTier.Status,
+                dataPoints = s.ElaTier.DataPoints,
+                pendingReason = s.ElaTier.PendingReason,
+                excluded = s.ElaTier.Evidence.Where(e => !e.Counted)
+                    .Select(e => new { e.Source, e.Category, e.Date, e.ExclusionReason }),
+            },
+            math = new
+            {
+                status = s.MathTier.Status,
+                dataPoints = s.MathTier.DataPoints,
+                pendingReason = s.MathTier.PendingReason,
+                excluded = s.MathTier.Evidence.Where(e => !e.Counted)
+                    .Select(e => new { e.Source, e.Category, e.Date, e.ExclusionReason }),
+            },
+        }).ToList();
+
+        var exclusionsBySourceAndReason = students
+            .SelectMany(s => s.ElaTier.Evidence.Concat(s.MathTier.Evidence))
+            .Where(e => !e.Counted)
+            .GroupBy(e => new { e.Source, e.ExclusionReason })
+            .Select(g => new { g.Key.Source, g.Key.ExclusionReason, count = g.Count() })
+            .OrderByDescending(g => g.count);
+
+        return Ok(new { summary = exclusionsBySourceAndReason, students = report });
+    }
+
+    // ── Clean-cutover purge (super-admin only). Irreversible — deletes every student and
+    // assessment document so LGS can re-upload source files under the corrected ingest logic
+    // without needing a backfill of historical period/date metadata. ──
+    [HttpPost("purge-all")]
+    public async Task<IActionResult> PurgeAll([FromBody] PurgeAllRequestDto dto)
+    {
+        if (dto.Confirm != "DELETE ALL STUDENT AND ASSESSMENT DATA")
+            return BadRequest(new { message = "Confirmation phrase did not match. This operation is irreversible and was not performed." });
+
+        var assessmentCount = await cosmos.DeleteAllAssessmentsAsync();
+        var studentCount = await cosmos.DeleteAllStudentsAsync();
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Delete, entityType: "PurgeAll", entityId: null,
+            details: $"Purged all data for tier-engine clean cutover: {studentCount} students, {assessmentCount} assessments deleted.",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(new { studentsDeleted = studentCount, assessmentsDeleted = assessmentCount });
+    }
+
+    public record PurgeAllRequestDto(string Confirm);
 
     [HttpGet("logs")]
     public async Task<IActionResult> Logs()
@@ -281,15 +361,17 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     private async Task<ParseSummaryDto> ProcessRowsAsync(
         List<Dictionary<string, string>> rows, string uploadType, string fileName, CancellationToken ct)
     {
-        int imported = 0, skipped = 0, duplicateAssessments = 0;
+        int imported = 0, skipped = 0, duplicateAssessments = 0, correctedAssessments = 0;
         var errors = new List<string>();
 
         // Signatures of assessments already recorded for each student, loaded lazily on first
-        // sight of that student and updated as we go. Guards against the same test event being
-        // stored twice — whether from re-importing a file (the landing-zone path had no
-        // duplicate protection at all) or from the client's overlapping exports, where one
-        // result legitimately appears in both a subject-specific and a combined "Results" file.
-        var seenAssessments = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // sight of that student and mapped to the existing document id so a corrected export
+        // (same test event, different score/proficiency) can be upserted in place instead of
+        // creating a second row. Guards against the same test event being stored twice — whether
+        // from re-importing a file (the landing-zone path had no duplicate protection at all) or
+        // from the client's overlapping exports, where one result legitimately appears in both a
+        // subject-specific and a combined "Results" file.
+        var seenAssessments = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
 
         foreach (var row in rows)
         {
@@ -419,8 +501,6 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                                             "Postal Code", "STUDENTS.Zip",
                                             "STUDENTS.Zip_Code"),
                         SourceFile = fileName,
-                        Tier       = "Pending",
-                        TierStatus = "Pending",
                         EnrolDate  = DateTime.UtcNow.ToString("o"),
                         LastUpdated = DateTime.UtcNow.ToString("o")
                     });
@@ -487,8 +567,6 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                             Grade      = GetVal(row, "Grade", "Grade_Level", "Enrolled Grade")?.TrimStart('0'),
                             Gender     = GetVal(row, "Gender"),
                             SourceFile = fileName,
-                            Tier       = "Pending",
-                            TierStatus = "Pending",
                             EnrolDate  = DateTime.UtcNow.ToString("o"),
                             LastUpdated = DateTime.UtcNow.ToString("o")
                         };
@@ -515,48 +593,77 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     double.TryParse(scoreRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var score);
 
                     var subject = GetVal(row, "Subject", "Content Area", "Test Subject")
-                                  ?? DetectSubject(uploadType, fileName, row);
+                                  ?? AssessmentNormalization.DetectSubject(uploadType, fileName, row);
                     var rawProficiency = GetVal(row, "Proficiency Level", "Performance Level",
                                             "Status", "Achievement Level",
                                             "Overall math tier", "Overall ELA tier", "Overall reading tier",
                                             "Reading Composite Status");
-                    var periodRaw = GetVal(row, "Period", "Term", "School Year",
-                                        "Benchmark Period", "Test OppNumber");
+                    var periodRaw = GetVal(row, "Period", "Term", "School Year", "Benchmark Period",
+                                        "Test OppNumber", "Assessment Window", "Test Window", "Checkpoint",
+                                        "Diagnostic Window", "Snapshot");
                     var date = GetVal(row, "Date", "Date Taken", "Date of completion",
                                       "Test Date", "Reading Composite Date");
 
                     // Task 13: normalise I-Read pass/fail → standard proficiency labels
                     var proficiency = uploadType.Equals("IREAD", StringComparison.OrdinalIgnoreCase)
-                        ? NormalizeIReadProficiency(rawProficiency)
+                        ? AssessmentNormalization.NormalizeIReadProficiency(rawProficiency)
                         : rawProficiency;
 
-                    // Task 12: normalise Acadience period (BOY/MOY/EOY)
-                    // Task 11: normalise ILEARN period (CP1/CP2/CP3)
-                    var period = uploadType.Equals("Acadience", StringComparison.OrdinalIgnoreCase)
-                        ? NormalizeAcadiencePeriod(periodRaw, fileName)
-                        : uploadType.Equals("ILEARN", StringComparison.OrdinalIgnoreCase)
-                            ? NormalizeIlearnPeriod(periodRaw, fileName)
-                            : periodRaw;
+                    // Period normalization: CP1/CP2/CP3/SPRING for ILEARN, BOY/MOY/EOY for
+                    // Acadience and IXL. Null (unresolved) is preserved as null rather than a raw
+                    // fallback — the tier engine excludes evidence it cannot weight rather than
+                    // silently defaulting a weight.
+                    var period = AssessmentNormalization.NormalizePeriod(uploadType, periodRaw, fileName);
 
-                    var normalizedSubject = NormalizeSubject(subject);
+                    var normalizedSubject = AssessmentNormalization.NormalizeSubject(subject);
                     var finalScore = score > 0 ? (double?)score : null;
+                    var dateIso = AssessmentNormalization.TryParseFlexibleDate(date, uploadType, out var dateAmbiguous);
 
-                    // A test event is identified by student + type + subject + date + score.
-                    // FileName is deliberately excluded: the same result arriving under two
-                    // different filenames is still one event, not two.
+                    // A test event is identified by student + type + subject + period + date.
+                    // Period is part of the identity (not just date+score) so that a corrected score
+                    // for the same checkpoint is recognised as the same event rather than counted
+                    // twice, while two different checkpoints that happen to share a date/score are
+                    // never collapsed into one (C-06). FileName is deliberately excluded: the same
+                    // result arriving under two different filenames is still one event.
                     if (!seenAssessments.TryGetValue(student.StudentId, out var signatures))
                     {
                         var existing = await cosmos.GetAssessmentsAsync(student.StudentId);
-                        signatures = existing
-                            .Select(a => AssessmentSignature(a.UploadType, a.Subject, a.Date, a.Score))
-                            .ToHashSet(StringComparer.Ordinal);
+                        signatures = existing.ToDictionary(
+                            a => AssessmentSignature(a.UploadType, a.Subject, a.Period, a.DateIso ?? a.Date),
+                            a => a.Id, StringComparer.Ordinal);
                         seenAssessments[student.StudentId] = signatures;
                     }
 
-                    var signature = AssessmentSignature(uploadType, normalizedSubject, date, finalScore);
-                    if (!signatures.Add(signature))
+                    var signature = AssessmentSignature(uploadType, normalizedSubject, period, dateIso ?? date);
+                    if (signatures.TryGetValue(signature, out var existingAssessmentId))
                     {
-                        duplicateAssessments++;
+                        // Same test event already recorded. If the value is unchanged, it's a true
+                        // duplicate (e.g. the same file re-imported); skip it. If the score or
+                        // proficiency differs, it's a corrected export (C-06) — update the existing
+                        // record in place rather than creating a second one.
+                        var existingAssessments = await cosmos.GetAssessmentsAsync(student.StudentId);
+                        var existingAssessment = existingAssessments.FirstOrDefault(a => a.Id == existingAssessmentId);
+                        var isCorrection = existingAssessment is not null &&
+                            (existingAssessment.Score != finalScore || existingAssessment.Proficiency != proficiency);
+
+                        if (!isCorrection)
+                        {
+                            duplicateAssessments++;
+                            continue;
+                        }
+
+                        existingAssessment!.Score = finalScore;
+                        existingAssessment.Proficiency = proficiency;
+                        existingAssessment.PeriodRaw = periodRaw;
+                        existingAssessment.Period = period;
+                        existingAssessment.Date = date;
+                        existingAssessment.DateIso = dateIso;
+                        existingAssessment.DateAmbiguous = dateAmbiguous;
+                        existingAssessment.FileName = fileName;
+                        existingAssessment.UploadedAt = DateTime.UtcNow.ToString("o");
+                        existingAssessment.RawFields = piiRedaction.RedactRawFields(row);
+                        await cosmos.UpsertAssessmentAsync(existingAssessment);
+                        correctedAssessments++;
                         continue;
                     }
 
@@ -566,6 +673,9 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                         StudentId  = student.StudentId,
                         UploadType = uploadType,
                         FileName   = fileName,
+                        PeriodRaw  = periodRaw,
+                        DateIso    = dateIso,
+                        DateAmbiguous = dateAmbiguous,
                         UploadedAt = DateTime.UtcNow.ToString("o"),
                         Subject    = normalizedSubject,
                         Score      = finalScore,
@@ -585,108 +695,11 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             }
         }
 
-        return new ParseSummaryDto(rows.Count, imported, skipped, errors, duplicateAssessments);
+        return new ParseSummaryDto(rows.Count, imported, skipped, errors, duplicateAssessments, correctedAssessments);
     }
 
-    private static string DetectSubject(string uploadType, string fileName,
-                                        Dictionary<string, string>? row = null)
-    {
-        // Acadience and I-Read are always Reading — must check before generic ELA/Reading check
-        if (uploadType.Equals("Acadience", StringComparison.OrdinalIgnoreCase) ||
-            uploadType.Equals("IREAD", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("Acadience", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("IREAD", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("I-READ", StringComparison.OrdinalIgnoreCase)) return "Reading";
-
-        if (uploadType.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("English", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("EnglishLanguageArts", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
-        if (uploadType.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("Math", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Contains("Mathematics", StringComparison.OrdinalIgnoreCase)) return "Math";
-
-        // Filename gave no signal. Combined IXL exports (e.g. "IXL-LevelUp-Diagnostic-Results-*.csv")
-        // contain neither "ELA" nor "Math" in the name, so rows from them were previously stored as
-        // "Mixed" — which the tier engine and dashboard subject grouping both ignore, silently
-        // discarding valid scores. The columns themselves are unambiguous, so fall back to those.
-        if (row is not null)
-        {
-            var hasEla  = row.Keys.Any(k => k.Contains("Overall ELA", StringComparison.OrdinalIgnoreCase)
-                                         || k.Contains("Overall reading", StringComparison.OrdinalIgnoreCase)
-                                         || k.Contains("Overall writing", StringComparison.OrdinalIgnoreCase));
-            var hasMath = row.Keys.Any(k => k.Contains("Overall math", StringComparison.OrdinalIgnoreCase));
-            if (hasEla && !hasMath) return "ELA";
-            if (hasMath && !hasEla) return "Math";
-        }
-
-        // Genuinely ambiguous — tier engine will treat as unknown.
-        return "Mixed";
-    }
-
-    private static string NormalizeSubject(string? subject)
-    {
-        if (subject is null) return "Mixed";
-        if (subject.Equals("Reading", StringComparison.OrdinalIgnoreCase)) return "Reading";
-        if (subject.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
-            subject.Contains("English", StringComparison.OrdinalIgnoreCase) ||
-            subject.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
-        if (subject.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
-        return subject;
-    }
-
-    // Maps I-Read pass/fail status strings → standard proficiency labels (BRD task 13)
-    private static string? NormalizeIReadProficiency(string? raw)
-    {
-        if (raw is null) return null;
-        var v = raw.Trim();
-        if (v.Contains("Did Not Pass", StringComparison.OrdinalIgnoreCase) ||
-            v.Equals("Fail", StringComparison.OrdinalIgnoreCase) ||
-            v.Equals("F", StringComparison.OrdinalIgnoreCase) ||
-            v.Equals("Not Passed", StringComparison.OrdinalIgnoreCase)) return "Below Proficiency";
-        if (v.Equals("Passed", StringComparison.OrdinalIgnoreCase) ||
-            v.Equals("Pass", StringComparison.OrdinalIgnoreCase) ||
-            v.Equals("P", StringComparison.OrdinalIgnoreCase)) return "At Proficiency";
-        if (v.Contains("Waived", StringComparison.OrdinalIgnoreCase)) return "Waived";
-        if (v.Contains("Exempt", StringComparison.OrdinalIgnoreCase)) return "Exempt";
-        return raw; // preserve unrecognised values as-is
-    }
-
-    // Extracts BOY/MOY/EOY period tag from Acadience filename or Period column value
-    private static string? NormalizeAcadiencePeriod(string? periodCol, string fileName)
-    {
-        var candidates = new[] { periodCol ?? "", fileName };
-        foreach (var s in candidates)
-        {
-            if (s.Contains("BOY", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Beginning", StringComparison.OrdinalIgnoreCase)) return "BOY";
-            if (s.Contains("MOY", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Middle", StringComparison.OrdinalIgnoreCase)) return "MOY";
-            if (s.Contains("EOY", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("End", StringComparison.OrdinalIgnoreCase)) return "EOY";
-        }
-        return periodCol; // fall back to whatever is in the column
-    }
-
-    // Extracts ILEARN checkpoint number from filename (CP1, CP2, CP3, Checkpoint1…)
-    private static string? NormalizeIlearnPeriod(string? periodCol, string fileName)
-    {
-        var candidates = new[] { periodCol ?? "", fileName };
-        foreach (var s in candidates)
-        {
-            if (s.Contains("CP1", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Checkpoint1", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Checkpoint 1", StringComparison.OrdinalIgnoreCase)) return "CP1";
-            if (s.Contains("CP2", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Checkpoint2", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Checkpoint 2", StringComparison.OrdinalIgnoreCase)) return "CP2";
-            if (s.Contains("CP3", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Checkpoint3", StringComparison.OrdinalIgnoreCase) ||
-                s.Contains("Checkpoint 3", StringComparison.OrdinalIgnoreCase)) return "CP3";
-        }
-        return periodCol;
-    }
+    // Subject/period/proficiency normalization now lives in AssessmentNormalization (shared with
+    // the tier engine and the data-quality/backfill tooling) — see calls above in ProcessRowsAsync.
 
     // Indiana STNs are 9 characters: either all digits, or a single letter prefix followed by
     // 8 digits (T/N/C/E prefixes observed in LGS files). IXL's internal student IDs are 7 digits
@@ -774,16 +787,17 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     }
 
     public record ParseSummaryDto(int TotalRows, int ImportedRows, int SkippedRows, List<string> Errors,
-                                  int DuplicateAssessments = 0);
+                                  int DuplicateAssessments = 0, int CorrectedAssessments = 0);
 
-    // Identifies a single test event. Two rows sharing this signature are the same result,
-    // regardless of which file they arrived in.
-    private static string AssessmentSignature(string? uploadType, string? subject, string? date, double? score)
+    // Identifies a single test event: student (via the caller's per-student signature set) + type +
+    // subject + period + date. Score is deliberately NOT part of the identity — a corrected score
+    // for the same checkpoint must be recognised as the same event (C-06), not a second one.
+    private static string AssessmentSignature(string? uploadType, string? subject, string? period, string? date)
         => string.Join('|',
             (uploadType ?? "").Trim().ToLowerInvariant(),
             (subject ?? "").Trim().ToLowerInvariant(),
-            (date ?? "").Trim(),
-            score?.ToString(CultureInfo.InvariantCulture) ?? "");
+            (period ?? "").Trim().ToUpperInvariant(),
+            (date ?? "").Trim());
 
     // ─── Validation helpers ───────────────────────────────────────────────────
 

@@ -54,7 +54,7 @@ export default function ExportPage() {
             </div>
             <div className="flex-1">
               <h2 className="font-semibold text-slate-800">Student Roster Export</h2>
-              <p className="text-sm text-slate-500 mt-1">Full student list with tier assignments, demographics, and assessment flags as an Excel (.xlsx) file.</p>
+              <p className="text-sm text-slate-500 mt-1">Full student list with per-subject ELA and Math tier assignments, demographics, and assessment flags as an Excel (.xlsx) file.</p>
               <button
                 onClick={handleStudentExport}
                 disabled={exportingStudents}

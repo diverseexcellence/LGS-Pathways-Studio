@@ -36,28 +36,50 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         return Ok(new { goalPct = existing.GoalPct });
     }
 
-    // ─── KPIs (ELA growth + Math proficiency) ────────────────────────────────
+    // ─── KPIs (ELA growth + Math proficiency + tier counts) ──────────────────
 
     [HttpGet("kpis")]
     public async Task<IActionResult> Kpis()
     {
         var allAssessments = await cosmos.GetAllAssessmentsAsync();
+        var ruleset = await cosmos.GetTierRulesetConfigAsync();
 
         // ── Math proficiency % ────────────────────────────────────────────────
-        // Group by studentId, pick latest Math assessment per student, resolve On/Above
+        // Group by studentId, pick latest Math assessment per student, resolve its 0-3 value via
+        // the same normalizer the tier engine uses (no percentile fallback — TR-003).
         var mathByStudent = allAssessments
-            .Where(a => NormalizeSubject(a.Subject) == "Math" && a.StudentId != null)
+            .Where(a => AssessmentNormalization.NormalizeSubject(a.Subject) == "Math" && a.StudentId != null)
             .GroupBy(a => a.StudentId)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.Date ?? a.UploadedAt).First());
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.DateIso ?? a.Date ?? a.UploadedAt).First());
 
         int mathTotal = mathByStudent.Count;
-        int mathOnAbove = mathByStudent.Values.Count(a => ResolveOnAbove(a) == true);
+        int mathOnAbove = mathByStudent.Values.Count(a =>
+            PerformanceLevelNormalizer.TryResolve(a.UploadType, a.Proficiency, ruleset, out var v) && v >= 2);
         double? mathPct = mathTotal > 0 ? Math.Round((double)mathOnAbove / mathTotal * 100, 1) : null;
+
+        // ── Tier distribution (System Recommended + Finalized subjects — see dashboard gating) ──
+        var (allStudents, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
+        var elaTiered = allStudents.Where(s => s.ElaTier.Status != "Pending").ToList();
+        var mathTiered = allStudents.Where(s => s.MathTier.Status != "Pending").ToList();
+        var elaTierCounts = new
+        {
+            tier1 = elaTiered.Count(s => s.ElaTier.Tier == "Tier 1"),
+            tier2 = elaTiered.Count(s => s.ElaTier.Tier == "Tier 2"),
+            tier3 = elaTiered.Count(s => s.ElaTier.Tier == "Tier 3"),
+            pending = allStudents.Count - elaTiered.Count,
+        };
+        var mathTierCounts = new
+        {
+            tier1 = mathTiered.Count(s => s.MathTier.Tier == "Tier 1"),
+            tier2 = mathTiered.Count(s => s.MathTier.Tier == "Tier 2"),
+            tier3 = mathTiered.Count(s => s.MathTier.Tier == "Tier 3"),
+            pending = allStudents.Count - mathTiered.Count,
+        };
 
         // ── ELA growth % ─────────────────────────────────────────────────────
         // Per student: earliest vs latest ELA score. Average the deltas across students who have ≥2 records.
         var elaByStudent = allAssessments
-            .Where(a => NormalizeSubject(a.Subject) == "ELA" && a.StudentId != null && a.Score.HasValue)
+            .Where(a => AssessmentNormalization.NormalizeSubject(a.Subject) == "ELA" && a.StudentId != null && a.Score.HasValue)
             .GroupBy(a => a.StudentId)
             .Where(g => g.Count() >= 2)
             .ToList();
@@ -67,7 +89,7 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         {
             var deltas = elaByStudent.Select(g =>
             {
-                var ordered = g.OrderBy(a => a.Date ?? a.UploadedAt).ToList();
+                var ordered = g.OrderBy(a => a.DateIso ?? a.Date ?? a.UploadedAt).ToList();
                 return ordered.Last().Score!.Value - ordered.First().Score!.Value;
             }).ToList();
             elaGrowth = Math.Round(deltas.Average(), 1);
@@ -80,6 +102,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             mathStudentsOnAbove = mathOnAbove,
             elaGrowthAvgDelta = elaGrowth,
             elaStudentsWithGrowthData = elaByStudent.Count,
+            elaTierCounts,
+            mathTierCounts,
         });
     }
 
@@ -96,10 +120,10 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         foreach (var a in allAssessments)
         {
             if (!a.Score.HasValue) continue;
-            var subject = NormalizeSubject(a.Subject);
+            var subject = AssessmentNormalization.NormalizeSubject(a.Subject);
             if (subject != "ELA" && subject != "Math") continue;
 
-            var dateStr = a.Date ?? a.UploadedAt;
+            var dateStr = a.DateIso ?? a.Date ?? a.UploadedAt;
             if (!DateTime.TryParse(dateStr, out var dt)) continue;
             var key = dt.ToString("yyyy-MM");
 
@@ -134,8 +158,12 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
 
     // ─── Grade drill-down ─────────────────────────────────────────────────────
 
+    // Selects the ELA or Math SubjectTier for a student. "?subject=ela|math" — defaults to ela.
+    private static SubjectTier SubjectOf(StudentDocument s, string? subject) =>
+        string.Equals(subject, "math", StringComparison.OrdinalIgnoreCase) ? s.MathTier : s.ElaTier;
+
     [HttpGet("by-grade")]
-    public async Task<IActionResult> ByGrade()
+    public async Task<IActionResult> ByGrade([FromQuery] string? subject = "ela")
     {
         var (students, _) = await cosmos.ListStudentsAsync(1, 10000, null, null, activeOnly: true);
 
@@ -143,8 +171,11 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
 
         foreach (var s in students)
         {
-            // BRD DB-4: only Finalized students in tier distribution
-            if (s.TierStatus != "Finalized") continue;
+            var t = SubjectOf(s, subject);
+            // Per-subject tier is included once the engine has produced a recommendation —
+            // System Recommended or Finalized — not gated to Finalized-only (that would show 0
+            // for every subject until every student is individually finalized).
+            if (t.Status == "Pending") continue;
 
             var grade = NormalizeGrade(s.Grade);
             if (!gradeMap.TryGetValue(grade, out var gs))
@@ -153,9 +184,9 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
                 gradeMap[grade] = gs;
             }
 
-            if (s.Tier == "Tier 1") gs.Tier1++;
-            else if (s.Tier == "Tier 2") gs.Tier2++;
-            else if (s.Tier == "Tier 3") gs.Tier3++;
+            if (t.Tier == "Tier 1") gs.Tier1++;
+            else if (t.Tier == "Tier 2") gs.Tier2++;
+            else if (t.Tier == "Tier 3") gs.Tier3++;
         }
 
         var result = gradeMap.Values
@@ -173,7 +204,7 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
     }
 
     [HttpGet("by-grade/{grade}/teachers")]
-    public async Task<IActionResult> TeachersByGrade(string grade)
+    public async Task<IActionResult> TeachersByGrade(string grade, [FromQuery] string? subject = "ela")
     {
         var (students, _) = await cosmos.ListStudentsAsync(1, 10000, null, null, activeOnly: true);
 
@@ -182,8 +213,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         foreach (var s in students)
         {
             if (NormalizeGrade(s.Grade) != grade) continue;
-            // BRD DB-4: only Finalized students in tier distribution
-            if (s.TierStatus != "Finalized") continue;
+            var t = SubjectOf(s, subject);
+            if (t.Status == "Pending") continue;
 
             var teacher = s.HomeRoom ?? s.ClassGroup ?? "Unassigned";
             if (!teacherMap.TryGetValue(teacher, out var ts))
@@ -193,9 +224,9 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             }
 
             ts.Total++;
-            if (s.Tier == "Tier 1") ts.Tier1++;
-            else if (s.Tier == "Tier 2") ts.Tier2++;
-            else if (s.Tier == "Tier 3") ts.Tier3++;
+            if (t.Tier == "Tier 1") ts.Tier1++;
+            else if (t.Tier == "Tier 2") ts.Tier2++;
+            else if (t.Tier == "Tier 3") ts.Tier3++;
         }
 
         var result = teacherMap.Values
@@ -224,8 +255,10 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             {
                 studentId = s.StudentId,
                 fullName = s.FullName,
-                tier = s.Tier,
-                tierStatus = s.TierStatus,
+                elaTier = s.ElaTier.Tier,
+                elaTierStatus = s.ElaTier.Status,
+                mathTier = s.MathTier.Tier,
+                mathTierStatus = s.MathTier.Status,
                 classGroup = s.ClassGroup,
                 homeRoom = s.HomeRoom,
             });
@@ -234,7 +267,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
     }
 
     // ─── Geographic Distribution (BRD DB-12) ─────────────────────────────────
-    // Returns tier counts grouped by ZIP code. No simulated socio-economic data.
+    // Returns tier counts grouped by ZIP code, for both subjects in one payload so the
+    // frontend's ELA/Math toggle is instant. No simulated socio-economic data.
     // Coordinates are resolved client-side via OpenStreetMap Nominatim.
 
     [HttpGet("geographic")]
@@ -249,9 +283,12 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             {
                 zip    = g.Key,
                 total  = g.Count(),
-                tier1  = g.Count(s => s.Tier == "Tier 1"),
-                tier2  = g.Count(s => s.Tier == "Tier 2"),
-                tier3  = g.Count(s => s.Tier == "Tier 3"),
+                elaTier1  = g.Count(s => s.ElaTier.Status != "Pending" && s.ElaTier.Tier == "Tier 1"),
+                elaTier2  = g.Count(s => s.ElaTier.Status != "Pending" && s.ElaTier.Tier == "Tier 2"),
+                elaTier3  = g.Count(s => s.ElaTier.Status != "Pending" && s.ElaTier.Tier == "Tier 3"),
+                mathTier1 = g.Count(s => s.MathTier.Status != "Pending" && s.MathTier.Tier == "Tier 1"),
+                mathTier2 = g.Count(s => s.MathTier.Status != "Pending" && s.MathTier.Tier == "Tier 2"),
+                mathTier3 = g.Count(s => s.MathTier.Status != "Pending" && s.MathTier.Tier == "Tier 3"),
             })
             .OrderByDescending(r => r.total)
             .ToList();
@@ -268,12 +305,13 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
     {
         var (students, _) = await cosmos.ListStudentsAsync(1, 10000, null, null, activeOnly: true);
         var allAssessments = await cosmos.GetAllAssessmentsAsync();
+        var ruleset = await cosmos.GetTierRulesetConfigAsync();
 
         // Index: studentId → most recent ELA assessment, most recent Math assessment
         var latestByStudentSubject = allAssessments
-            .Where(a => NormalizeSubject(a.Subject) is "ELA" or "Math")
-            .GroupBy(a => $"{a.StudentId}|{NormalizeSubject(a.Subject)}")
-            .Select(g => g.OrderByDescending(a => a.Date ?? a.UploadedAt).First())
+            .Where(a => AssessmentNormalization.NormalizeSubject(a.Subject) is "ELA" or "Math")
+            .GroupBy(a => $"{a.StudentId}|{AssessmentNormalization.NormalizeSubject(a.Subject)}")
+            .Select(g => g.OrderByDescending(a => a.DateIso ?? a.Date ?? a.UploadedAt).First())
             .ToList();
 
         // grade → { above, on, approaching, below, noData }
@@ -296,7 +334,7 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
 
             // Resolve the lowest proficiency band across ELA + Math (conservative signal)
             var proficiencies = studentAssessments
-                .Select(a => NormalizeProficiencyBand(a.Proficiency, a.RawFields))
+                .Select(a => PerformanceLevelNormalizer.TryResolveBand(a.UploadType, a.Proficiency, ruleset))
                 .Where(p => p != null)
                 .ToList();
 
@@ -340,32 +378,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         return Ok(result);
     }
 
-    private static string? NormalizeProficiencyBand(string? proficiency, Dictionary<string, string> rawFields)
-    {
-        var p = (proficiency ?? "").ToLowerInvariant().Trim();
-        if (!string.IsNullOrEmpty(p))
-        {
-            if (p.Contains("far below") || p.Contains("did not pass") || p is "fail" or "no") return "below";
-            if (p.Contains("below")) return "below";
-            if (p.Contains("approaching")) return "approaching";
-            if (p.Contains("above") || p.Contains("exceeds") || p.Contains("mid above")) return "above";
-            if (p.Contains("on grade") || p.Contains("at grade") || p.Contains("at prof") ||
-                p.Contains("proficient") || p.Contains("meets") || p.Contains("early on") ||
-                p is "pass" or "yes") return "on";
-            if (p == "tier 1") return "on";
-            if (p is "tier 2") return "approaching";
-            if (p is "tier 3") return "below";
-        }
-        // Percentile fallback
-        foreach (var kv in rawFields)
-        {
-            if (kv.Key.Contains("percentile", StringComparison.OrdinalIgnoreCase) &&
-                double.TryParse(kv.Value, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var pct))
-                return pct >= 60 ? "above" : pct >= 40 ? "on" : pct >= 25 ? "approaching" : "below";
-        }
-        return null;
-    }
+    // Proficiency-band resolution now goes through PerformanceLevelNormalizer.TryResolveBand
+    // (shared with the tier engine) — see ByGradeProficiency above. No percentile fallback (TR-003).
 
     private static int BandSortKey(string? b) => b switch
     {
@@ -378,40 +392,9 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
-
-    private static string NormalizeSubject(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return "Unknown";
-        var s = raw.Trim();
-        if (s.Equals("Reading", StringComparison.OrdinalIgnoreCase)) return "Reading";
-        if (s.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
-            s.Contains("English", StringComparison.OrdinalIgnoreCase) ||
-            s.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
-        if (s.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
-        return s;
-    }
-
-    private static bool? ResolveOnAbove(AssessmentDocument a)
-    {
-        var p = (a.Proficiency ?? "").ToLowerInvariant();
-        if (!string.IsNullOrWhiteSpace(p))
-        {
-            if (p.Contains("far below") || p.Contains("below") || p.Contains("approaching") ||
-                p.Contains("tier 2") || p.Contains("tier 3")) return false;
-            if (p.Contains("above") || p.Contains("on grade") || p.Contains("at grade") ||
-                p.Contains("at proficiency") || p.Contains("proficient") || p.Contains("meets") ||
-                p.Contains("exceeds") || p.Contains("mid above") || p.Contains("early on") ||
-                p.Contains("tier 1")) return true;
-        }
-        // Fallback: scan RawFields for percentile
-        foreach (var kv in a.RawFields)
-        {
-            if (kv.Key.Contains("percentile", StringComparison.OrdinalIgnoreCase) &&
-                double.TryParse(kv.Value, out var pct))
-                return pct >= 40;
-        }
-        return null;
-    }
+    // Subject and performance-level resolution now go through AssessmentNormalization /
+    // PerformanceLevelNormalizer (shared with the tier engine) — this used to be a second,
+    // divergent copy of both that could disagree with the stored tier for the same student.
 
     private static string NormalizeGrade(string? raw)
     {

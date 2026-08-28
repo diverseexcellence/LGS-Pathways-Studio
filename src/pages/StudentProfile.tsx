@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, Student, Assessment, AISummary, AuditEntry, CollaborationNote } from '../lib/api';
+import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, configApi, Student, Assessment, AISummary, AuditEntry, CollaborationNote, TierRuleset } from '../lib/api';
 
 const AUDIT_EVENT_LABELS: Record<string, string> = {
   TierRecommendation: 'Tier Recommendation',
@@ -180,8 +180,10 @@ export default function StudentProfile() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const [overrideTier, setOverrideTier] = useState('');
-  const [isSavingTier, setIsSavingTier] = useState(false);
+  // Two independent subjects — there is no combined overall tier to override (TR-011).
+  const [overrideTierEla, setOverrideTierEla] = useState('');
+  const [overrideTierMath, setOverrideTierMath] = useState('');
+  const [isSavingTier, setIsSavingTier] = useState<'ela' | 'math' | null>(null);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
   const [showPlanModal, setShowPlanModal] = useState(false);
@@ -201,9 +203,15 @@ export default function StudentProfile() {
   const [noteText, setNoteText] = useState('');
   const [isPostingNote, setIsPostingNote] = useState(false);
 
-  // G6 – tier criteria tooltip
+  // G6 – tier criteria tooltip, built from the live ruleset so it can never drift from the
+  // engine's actual weights/thresholds the way the old hardcoded boolean-rule text could.
   const [showTierTooltip, setShowTierTooltip] = useState(false);
+  const [tierRuleset, setTierRuleset] = useState<TierRuleset | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    configApi.getTierRules().then(setTierRuleset).catch(() => {});
+  }, []);
 
   // BRD ST-16 – Generate Recommendation
   const [isGeneratingRec, setIsGeneratingRec] = useState(false);
@@ -271,17 +279,18 @@ export default function StudentProfile() {
     } catch { return ts; }
   }
 
-  async function handleOverrideTier() {
-    if (!overrideTier || !student) return;
-    setIsSavingTier(true);
+  async function handleOverrideTier(subject: 'ela' | 'math') {
+    const value = subject === 'ela' ? overrideTierEla : overrideTierMath;
+    if (!value || !student) return;
+    setIsSavingTier(subject);
     try {
-      const updated = await studentsApi.update(studentId, { tier: overrideTier, tierStatus: 'Finalized' });
+      const updated = await studentsApi.setSubjectTier(studentId, subject, { tier: value, status: 'Finalized' });
       setStudent(updated);
-      setOverrideTier('');
+      if (subject === 'ela') setOverrideTierEla(''); else setOverrideTierMath('');
     } catch (e: any) {
       alert('Failed to save tier: ' + e.message);
     } finally {
-      setIsSavingTier(false);
+      setIsSavingTier(null);
     }
   }
 
@@ -351,16 +360,30 @@ export default function StudentProfile() {
       : <ArrowDown className="w-4 h-4 ml-1 text-lgs-blue" />;
   }
 
-  const tierColor =
-    student?.tier === 'Tier 1' ? 'bg-green-100 text-green-700 border-green-200' :
-    student?.tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
-    student?.tier === 'Tier 3' ? 'bg-red-100 text-red-700 border-red-200' :
-    'bg-slate-100 text-slate-600 border-slate-200';
+  function tierBadgeColor(tier: string | null | undefined) {
+    return tier === 'Tier 1' ? 'bg-green-100 text-green-700 border-green-200' :
+      tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
+      tier === 'Tier 3' ? 'bg-red-100 text-red-700 border-red-200' :
+      'bg-slate-100 text-slate-600 border-slate-200';
+  }
 
+  function pendingReasonText(reason: string | null | undefined) {
+    return reason === 'no_assessments' ? 'No assessment data uploaded yet.'
+      : reason === 'insufficient_data_points' ? 'Not enough evidence yet — at least 2 data points are required.'
+      : reason === 'all_evidence_excluded' ? 'Assessment data present but none of it is usable evidence (see Tiering Evidence below).'
+      : reason || 'Pending / Review — not enough evidence for an automatic tier.';
+  }
+
+  // The overall hero accent is a colour cue only — never labelled or stored — taken from
+  // whichever subject has the lower (more urgent) tier. There is no combined tier value (TR-011).
+  const worstTier = [student?.elaTier?.tier, student?.mathTier?.tier].includes('Tier 3') ? 'Tier 3'
+    : [student?.elaTier?.tier, student?.mathTier?.tier].includes('Tier 2') ? 'Tier 2'
+    : [student?.elaTier?.tier, student?.mathTier?.tier].includes('Tier 1') ? 'Tier 1'
+    : null;
   const tierAccent =
-    student?.tier === 'Tier 1' ? 'border-t-green-500' :
-    student?.tier === 'Tier 2' ? 'border-t-yellow-500' :
-    student?.tier === 'Tier 3' ? 'border-t-red-500' :
+    worstTier === 'Tier 1' ? 'border-t-green-500' :
+    worstTier === 'Tier 2' ? 'border-t-yellow-500' :
+    worstTier === 'Tier 3' ? 'border-t-red-500' :
     'border-t-lgs-red';
 
   if (loading) return (
@@ -419,25 +442,24 @@ export default function StudentProfile() {
             </div>
           </div>
 
-          {/* Tier badge */}
-          <div className="shrink-0 text-right">
-            <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border ${tierColor}`}>
-              {student.tier || 'Pending'}
-            </span>
-            {student.tierStatus && (
-              <p className="text-xs text-slate-400 mt-1">{student.tierStatus}</p>
-            )}
-            {student.tierStatus === 'Pending' && student.tierPendingReason && (
-              <p className="text-xs text-amber-600 mt-0.5 max-w-[180px]">
-                {student.tierPendingReason === 'no_assessments'
-                  ? 'No assessment data uploaded yet.'
-                  : student.tierPendingReason === 'no_proficiency_or_percentile'
-                  ? 'Assessment data present but no proficiency label or percentile found.'
-                  : student.tierPendingReason === 'insufficient_subjects'
-                  ? 'Reading data only — ELA and Math required for Grade 3+.'
-                  : student.tierPendingReason}
-              </p>
-            )}
+          {/* Two independent subject tier badges — no combined overall tier (TR-011) */}
+          <div className="shrink-0 flex flex-col sm:flex-row gap-4">
+            {([['ELA', student.elaTier], ['Math', student.mathTier]] as const).map(([label, t]) => (
+              <div key={label} className="text-right">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">{label}</p>
+                <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border ${tierBadgeColor(t?.tier)}`}>
+                  {t?.tier || 'Pending'}
+                </span>
+                {t?.status && t.status !== 'Pending' && (
+                  <p className="text-xs text-slate-400 mt-1">
+                    {t.status}{t.score != null ? ` · score ${t.score.toFixed(2)} (${t.dataPoints} pt${t.dataPoints === 1 ? '' : 's'})` : ''}
+                  </p>
+                )}
+                {t?.status === 'Pending' && (
+                  <p className="text-xs text-amber-600 mt-0.5 max-w-[180px]">{pendingReasonText(t.pendingReason)}</p>
+                )}
+              </div>
+            ))}
           </div>
         </div>
 
@@ -565,11 +587,26 @@ export default function StudentProfile() {
                     <Info className="w-4 h-4" />
                   </button>
                   {showTierTooltip && (
-                    <div className="absolute right-0 top-8 z-20 w-64 bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-xs text-slate-700">
+                    <div className="absolute right-0 top-8 z-20 w-72 bg-white border border-slate-200 rounded-lg shadow-lg p-3 text-xs text-slate-700">
                       <p className="font-semibold text-slate-800 mb-1.5">Tiering Criteria</p>
-                      <p><span className="text-green-600 font-medium">Tier 1:</span> On/Above in both Math & ELA</p>
-                      <p className="mt-1"><span className="text-yellow-600 font-medium">Tier 2:</span> On/Above in one subject</p>
-                      <p className="mt-1"><span className="text-red-600 font-medium">Tier 3:</span> Below in both subjects</p>
+                      {tierRuleset ? (
+                        <>
+                          <p className="text-slate-500 mb-1.5">ELA and Math are scored independently: weighted score = Σ(performance value × evidence weight) ÷ Σ(available weight).</p>
+                          {[...tierRuleset.tierThresholds].sort((a, b) => b.minScoreInclusive - a.minScoreInclusive).map(t => (
+                            <p key={t.tier} className="mt-0.5">
+                              <span className={`font-medium ${t.tier === 'Tier 1' ? 'text-green-600' : t.tier === 'Tier 2' ? 'text-yellow-600' : 'text-red-600'}`}>{t.tier}:</span>{' '}
+                              score ≥ {t.minScoreInclusive.toFixed(2)}
+                            </p>
+                          ))}
+                          <p className="mt-1.5 text-slate-500">Requires at least {tierRuleset.minDataPoints} data point{tierRuleset.minDataPoints === 1 ? '' : 's'}; otherwise the subject is Pending / Review.</p>
+                        </>
+                      ) : (
+                        <>
+                          <p><span className="text-green-600 font-medium">Tier 1:</span> weighted score ≥ 2.00</p>
+                          <p className="mt-1"><span className="text-yellow-600 font-medium">Tier 2:</span> weighted score 1.00–1.99</p>
+                          <p className="mt-1"><span className="text-red-600 font-medium">Tier 3:</span> weighted score below 1.00</p>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -614,44 +651,67 @@ export default function StudentProfile() {
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-lgs-blue">
             <h2 className="text-lg font-semibold text-lgs-blue mb-4">Tier Management</h2>
 
-            {/* BRD ST-16: Generate Recommendation button */}
+            {/* BRD ST-16: one Generate Recommendation button recomputes both subjects at once —
+                the engine skips whichever subject is already Finalized. Override/Finalize is
+                per-subject below since ELA and Math are independent (TR-011). */}
             <div className="mb-4">
               <button
                 onClick={handleGenerateRecommendation}
-                disabled={isGeneratingRec || student?.tierStatus === 'Finalized'}
+                disabled={isGeneratingRec || (student?.elaTier.status === 'Finalized' && student?.mathTier.status === 'Finalized')}
                 className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
-                title={student?.tierStatus === 'Finalized' ? 'Tier is Finalized — use Override to change' : 'Run tier recommendation engine for this student'}
+                title={student?.elaTier.status === 'Finalized' && student?.mathTier.status === 'Finalized' ? 'Both tiers are Finalized — use Override to change' : 'Run the tier recommendation engine for this student'}
               >
                 <Sparkles className="w-4 h-4" />
                 {isGeneratingRec ? 'Calculating…' : 'Generate Recommendation'}
               </button>
-              {student?.tierStatus === 'Finalized' && (
-                <p className="text-xs text-slate-400 mt-1 text-center">Tier is Finalized — use Override below to change.</p>
-              )}
             </div>
 
-            <div className="border-t border-slate-100 pt-4">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Override / Finalize Tier</label>
-              <div className="flex gap-2">
-                <select
-                  value={overrideTier}
-                  onChange={e => setOverrideTier(e.target.value)}
-                  className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none"
-                >
-                  <option value="">Select Tier...</option>
-                  <option value="Tier 1">Tier 1</option>
-                  <option value="Tier 2">Tier 2</option>
-                  <option value="Tier 3">Tier 3</option>
-                </select>
-                <button
-                  onClick={handleOverrideTier}
-                  disabled={!overrideTier || isSavingTier}
-                  className="px-4 py-2 bg-lgs-red text-white text-sm font-medium rounded-lg hover:bg-lgs-red-dark disabled:opacity-50"
-                >
-                  {isSavingTier ? '...' : 'Save'}
-                </button>
+            {([
+              ['ela', 'ELA', student?.elaTier, overrideTierEla, setOverrideTierEla] as const,
+              ['math', 'Math', student?.mathTier, overrideTierMath, setOverrideTierMath] as const,
+            ]).map(([subject, label, t, value, setValue]) => (
+              <div key={subject} className="border-t border-slate-100 pt-4 mt-4 first:mt-0 first:border-t-0 first:pt-0">
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  {label} — Override / Finalize
+                  {t?.status === 'Finalized' && <span className="ml-2 text-xs font-normal text-slate-400">(Finalized — Generate Recommendation won't overwrite this)</span>}
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    value={value}
+                    onChange={e => setValue(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none"
+                  >
+                    <option value="">Select Tier...</option>
+                    <option value="Tier 1">Tier 1</option>
+                    <option value="Tier 2">Tier 2</option>
+                    <option value="Tier 3">Tier 3</option>
+                  </select>
+                  <button
+                    onClick={() => handleOverrideTier(subject)}
+                    disabled={!value || isSavingTier === subject}
+                    className="px-4 py-2 bg-lgs-red text-white text-sm font-medium rounded-lg hover:bg-lgs-red-dark disabled:opacity-50"
+                  >
+                    {isSavingTier === subject ? '...' : 'Save'}
+                  </button>
+                </div>
+                {t?.reasoning && (
+                  <details className="mt-2">
+                    <summary className="text-xs text-slate-400 cursor-pointer hover:text-lgs-blue">Tiering Evidence</summary>
+                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{t.reasoning}</p>
+                    {t.evidence.length > 0 && (
+                      <ul className="mt-1.5 space-y-0.5">
+                        {t.evidence.map(ev => (
+                          <li key={ev.assessmentId} className={`text-xs ${ev.counted ? 'text-slate-600' : 'text-slate-400 line-through'}`}>
+                            {ev.source} {ev.period ?? '—'} "{ev.category ?? 'n/a'}"
+                            {ev.counted ? ` (${ev.value}×${ev.weight})` : ` (excluded: ${ev.exclusionReason})`}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </details>
+                )}
               </div>
-            </div>
+            ))}
           </div>
 
           {/* Learning Plans stub - local state only (future: dedicated API endpoint) */}
@@ -663,7 +723,13 @@ export default function StudentProfile() {
               </h2>
               <button
                 onClick={() => {
-                  const validTier = student?.tier && ['Tier 1', 'Tier 2', 'Tier 3'].includes(student.tier) ? student.tier : 'Tier 1';
+                  // Default to whichever subject has the more urgent (lower) tier, since the
+                  // student no longer has one combined tier to default from (TR-011).
+                  const candidates = [student?.elaTier?.tier, student?.mathTier?.tier];
+                  const validTier = candidates.includes('Tier 3') ? 'Tier 3'
+                    : candidates.includes('Tier 2') ? 'Tier 2'
+                    : candidates.includes('Tier 1') ? 'Tier 1'
+                    : 'Tier 1';
                   setNewPlan({ tier: validTier, strategy: '', customDetails: '', frequency: 'Weekly' });
                   setShowPlanModal(true);
                 }}

@@ -20,11 +20,13 @@ public interface ICosmosDbService
     Task<StudentDocument?> FindStudentByLocalIdAsync(string localId);
     Task<int> DeleteStudentsWhereNameIsNumericAsync();
     Task<int> DeduplicateStudentsAsync();
+    Task<int> DeleteAllStudentsAsync();
 
     // Assessments
     Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null);
     Task<List<AssessmentDocument>> GetAllAssessmentsAsync();
     Task CreateAssessmentAsync(AssessmentDocument assessment);
+    Task UpsertAssessmentAsync(AssessmentDocument assessment);
     Task DeleteAssessmentsByFileNameAsync(string fileName);
     Task<int> DeleteAllAssessmentsAsync();
 
@@ -173,7 +175,10 @@ public class CosmosDbService : ICosmosDbService
         {
             "stn" => s => s.Stn,
             "grade" => s => s.Grade,
-            "tier" => s => s.Tier,
+            "elatier" => s => s.ElaTier.Tier,
+            "mathtier" => s => s.MathTier.Tier,
+            "elascore" => s => s.ElaTier.Score,
+            "mathscore" => s => s.MathTier.Score,
             "isactive" => s => s.IsActive,
             "classgroup" => s => s.ClassGroup,
             _ => s => s.FullName,
@@ -324,6 +329,24 @@ public class CosmosDbService : ICosmosDbService
         return merged;
     }
 
+    // Destructive: deletes every student document. Used only by the tier-engine clean-cutover
+    // purge (POST /api/upload/purge-all) — never called from ordinary application flow.
+    public async Task<int> DeleteAllStudentsAsync()
+    {
+        var all = new List<StudentDocument>();
+        var q = Students.GetItemQueryIterator<StudentDocument>(
+            new QueryDefinition("SELECT * FROM c"),
+            requestOptions: new QueryRequestOptions { MaxItemCount = -1 });
+        while (q.HasMoreResults)
+        {
+            var pg = await q.ReadNextAsync();
+            all.AddRange(pg);
+        }
+        foreach (var s in all)
+            await Students.DeleteItemAsync<StudentDocument>(s.Id, new PartitionKey(s.ClassGroup));
+        return all.Count;
+    }
+
     public async Task<StudentDocument?> FindStudentByLocalIdAsync(string localId)
     {
         var query = Students.GetItemLinqQueryable<StudentDocument>()
@@ -375,6 +398,9 @@ public class CosmosDbService : ICosmosDbService
 
     public async Task CreateAssessmentAsync(AssessmentDocument assessment)
         => await Assessments.CreateItemAsync(assessment, new PartitionKey(assessment.StudentId));
+
+    public async Task UpsertAssessmentAsync(AssessmentDocument assessment)
+        => await Assessments.UpsertItemAsync(assessment, new PartitionKey(assessment.StudentId));
 
     public async Task<int> DeleteAllAssessmentsAsync()
     {

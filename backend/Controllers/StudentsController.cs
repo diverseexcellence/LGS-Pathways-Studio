@@ -48,44 +48,65 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         return Ok(student);
     }
 
+    // Demographics-only. Tier overrides go through PUT /api/students/{id}/tier/{subject} —
+    // there is no combined tier to set here (TR-011, AC-08).
     [HttpPatch("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] StudentUpdateDto dto)
     {
         var student = await cosmos.GetStudentAsync(id);
         if (student is null || !student.IsActive) return NotFound();
 
-        // Capture prior tier values before mutation (needed for finalize audit entry)
-        var priorTier = student.Tier;
-        var priorTierStatus = student.TierStatus;
-
         var changed = new List<string>();
         if (dto.ClassGroup is not null) { student.ClassGroup = dto.ClassGroup; changed.Add($"ClassGroup→{dto.ClassGroup}"); }
         if (dto.Grade is not null) { student.Grade = dto.Grade; changed.Add($"Grade→{dto.Grade}"); }
-        if (dto.Tier is not null) { student.Tier = dto.Tier; changed.Add($"Tier→{dto.Tier}"); }
-        if (dto.TierStatus is not null) { student.TierStatus = dto.TierStatus; changed.Add($"TierStatus→{dto.TierStatus}"); }
         if (dto.HomeRoom is not null) { student.HomeRoom = dto.HomeRoom; changed.Add($"HomeRoom→{dto.HomeRoom}"); }
         student.LastUpdated = DateTime.UtcNow.ToString("o");
 
         await cosmos.UpsertStudentAsync(student);
 
-        // BRD ST-17: finalize produces a dedicated audit entry with prior→new tier values
-        string auditDetails;
-        AuditEventType auditEventType;
-        if (dto.TierStatus == "Finalized" && dto.Tier is not null)
-        {
-            auditDetails = $"Tier Overridden / Finalized by Admin — {student.FullName}: " +
-                           $"Prior: {priorTier} ({priorTierStatus}) → New: {student.Tier} (Finalized)";
-            auditEventType = AuditEventType.TierRecommendation;
-        }
-        else
-        {
-            auditDetails = $"Edited {student.FullName}: {string.Join(", ", changed)}";
-            auditEventType = AuditEventType.Edit;
-        }
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Edit, entityType: "Student", entityId: id,
+            details: $"Edited {student.FullName}: {string.Join(", ", changed)}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(student);
+    }
+
+    // BRD ST-17 (per-subject): admin override / finalize of a single subject's tier. There is no
+    // combined overall tier to set (TR-011, AC-08) — ELA and Math are overridden independently.
+    [HttpPut("{id}/tier/{subject}")]
+    public async Task<IActionResult> SetSubjectTier(string id, string subject, [FromBody] SetSubjectTierDto dto)
+    {
+        var student = await cosmos.GetStudentAsync(id);
+        if (student is null || !student.IsActive) return NotFound();
+
+        SubjectTier target;
+        string subjectLabel;
+        if (string.Equals(subject, "ela", StringComparison.OrdinalIgnoreCase)) { target = student.ElaTier; subjectLabel = "ELA"; }
+        else if (string.Equals(subject, "math", StringComparison.OrdinalIgnoreCase)) { target = student.MathTier; subjectLabel = "Math"; }
+        else return BadRequest(new { message = "subject must be 'ela' or 'math'." });
+
+        if (dto.Tier is not null && dto.Tier is not ("Tier 1" or "Tier 2" or "Tier 3"))
+            return BadRequest(new { message = "tier must be 'Tier 1', 'Tier 2', or 'Tier 3'." });
+        if (dto.Status is not null && dto.Status is not ("Pending" or "System Recommended" or "Finalized"))
+            return BadRequest(new { message = "status must be 'Pending', 'System Recommended', or 'Finalized'." });
+
+        var priorTier = target.Tier;
+        var priorStatus = target.Status;
+
+        if (dto.Tier is not null) target.Tier = dto.Tier;
+        if (dto.Status is not null) target.Status = dto.Status;
+        target.OverriddenBy = CurrentAdminEmail;
+        target.OverriddenAt = DateTime.UtcNow.ToString("o");
+        student.LastUpdated = DateTime.UtcNow.ToString("o");
+
+        await cosmos.UpsertStudentAsync(student);
 
         await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
-            auditEventType, entityType: "Student", entityId: id,
-            details: auditDetails,
+            AuditEventType.TierRecommendation, entityType: "Student", entityId: id,
+            details: $"{subjectLabel} Tier Overridden / Finalized by Admin — {student.FullName}: " +
+                     $"Prior: {priorTier ?? "Pending"} ({priorStatus}) → New: {target.Tier ?? "Pending"} ({target.Status})" +
+                     (dto.Note is not null ? $" | Note: {dto.Note}" : ""),
             ip: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(student);
@@ -108,31 +129,22 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
 
         return NoContent();
     }
-    // BRD ST-16 / Generate Recommendation button: recalculate tier for a single student
+    // BRD ST-16 / Generate Recommendation button: recalculate tier for a single student.
+    // Per-subject Finalized gating: a subject already Finalized is left untouched by the engine,
+    // so this only 400s when BOTH subjects are Finalized (nothing left to compute).
     [HttpPost("{id}/recalculate-tier")]
     public async Task<IActionResult> RecalculateTier(string id)
     {
         var student = await cosmos.GetStudentAsync(id);
         if (student is null || !student.IsActive) return NotFound();
 
-        // Don't overwrite a Finalized tier
-        if (student.TierStatus == "Finalized")
-            return BadRequest(new { message = "Tier is already Finalized. Use Override to change it." });
+        if (student.AllSubjectsFinalized)
+            return BadRequest(new { message = "Both ELA and Math tiers are Finalized. Use Override to change them." });
 
-        var priorTier = student.Tier;
-        var priorStatus = student.TierStatus;
-
+        // ComputeAndApplyAsync writes its own audit entry covering both subjects.
         await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);
 
-        // Re-fetch to return updated state
         student = (await cosmos.GetStudentAsync(id))!;
-
-        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
-            AuditEventType.TierRecommendation, entityType: "Student", entityId: id,
-            details: $"System Tier Recommendation Generated — {student.FullName}: " +
-                     $"Prior: {priorTier} ({priorStatus}) → New: {student.Tier} ({student.TierStatus})",
-            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
-
         return Ok(student);
     }
 
@@ -214,5 +226,6 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
     }
 }
 
-public record StudentUpdateDto(string? ClassGroup, string? Grade, string? Tier, string? TierStatus, string? HomeRoom);
+public record StudentUpdateDto(string? ClassGroup, string? Grade, string? HomeRoom);
+public record SetSubjectTierDto(string? Tier, string? Status, string? Note);
 public record CreateNoteDto(string Text);

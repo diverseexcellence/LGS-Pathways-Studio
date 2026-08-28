@@ -137,7 +137,7 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
 
         // Row 1 — confidentiality banner
         ws.Cells[1, 1].Value = "CONFIDENTIAL — FOR AUTHORISED LGS STAFF USE ONLY — DO NOT DISTRIBUTE";
-        ws.Cells[1, 1, 1, 10].Merge = true;
+        ws.Cells[1, 1, 1, 16].Merge = true;
         ws.Cells[1, 1].Style.Font.Bold = true;
         ws.Cells[1, 1].Style.Font.Color.SetColor(Color.White);
         ws.Cells[1, 1].Style.Fill.PatternType = ExcelFillStyle.Solid;
@@ -146,13 +146,15 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
 
         // Row 2 — watermark: who exported and when
         ws.Cells[2, 1].Value = $"Exported by: {adminName} ({CurrentAdminEmail})  |  Date: {exportedAt:yyyy-MM-dd HH:mm} UTC  |  Records: {students.Count}";
-        ws.Cells[2, 1, 2, 10].Merge = true;
+        ws.Cells[2, 1, 2, 16].Merge = true;
         ws.Cells[2, 1].Style.Font.Italic = true;
         ws.Cells[2, 1].Style.Font.Color.SetColor(Color.DarkRed);
         ws.Cells[2, 1].Style.Fill.PatternType = ExcelFillStyle.Solid;
         ws.Cells[2, 1].Style.Fill.BackgroundColor.SetColor(Color.LightYellow);
 
-        string[] headers = ["ID", "Full Name", "DOB", "Class", "Grade", "Gender", "Ethnicity", "ELL", "Tier", "Tier Status"];
+        string[] headers = ["ID", "Full Name", "DOB", "Class", "Grade", "Gender", "Ethnicity", "ELL",
+                            "ELA Tier", "ELA Status", "ELA Score", "ELA Data Pts",
+                            "Math Tier", "Math Status", "Math Score", "Math Data Pts"];
         for (int i = 0; i < headers.Length; i++)
         {
             ws.Cells[3, i + 1].Value = headers[i];
@@ -174,13 +176,19 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
             ws.Cells[row, 6].Value  = s.Gender;
             ws.Cells[row, 7].Value  = s.Ethnicity;
             ws.Cells[row, 8].Value  = s.EllStatus;
-            ws.Cells[row, 9].Value  = s.Tier;
-            ws.Cells[row, 10].Value = s.TierStatus;
+            ws.Cells[row, 9].Value  = s.ElaTier.Tier ?? "Pending";
+            ws.Cells[row, 10].Value = s.ElaTier.Status;
+            ws.Cells[row, 11].Value = s.ElaTier.Score;
+            ws.Cells[row, 12].Value = s.ElaTier.DataPoints;
+            ws.Cells[row, 13].Value = s.MathTier.Tier ?? "Pending";
+            ws.Cells[row, 14].Value = s.MathTier.Status;
+            ws.Cells[row, 15].Value = s.MathTier.Score;
+            ws.Cells[row, 16].Value = s.MathTier.DataPoints;
 
             if (r % 2 == 1)
             {
-                ws.Cells[row, 1, row, 10].Style.Fill.PatternType = ExcelFillStyle.Solid;
-                ws.Cells[row, 1, row, 10].Style.Fill.BackgroundColor.SetColor(Color.FromArgb(0xF4, 0xF4, 0xF4));
+                ws.Cells[row, 1, row, 16].Style.Fill.PatternType = ExcelFillStyle.Solid;
+                ws.Cells[row, 1, row, 16].Style.Fill.BackgroundColor.SetColor(Color.FromArgb(0xF4, 0xF4, 0xF4));
             }
         }
 

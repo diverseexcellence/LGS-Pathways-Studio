@@ -56,6 +56,33 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+// Two independent subject-level tiers — there is no combined overall student tier (TR-011).
+export interface TierEvidence {
+  assessmentId: string;
+  source: string;
+  period: string | null;
+  category: string | null;
+  value: number | null;
+  weight: number | null;
+  date: string | null;
+  counted: boolean;
+  exclusionReason: string | null;
+}
+
+export interface SubjectTier {
+  tier: string | null;
+  status: string; // "Pending" | "System Recommended" | "Finalized"
+  score: number | null;
+  dataPoints: number;
+  pendingReason: string | null;
+  reasoning: string | null;
+  rulesetVersion: string | null;
+  computedAt: string | null;
+  overriddenBy: string | null;
+  overriddenAt: string | null;
+  evidence: TierEvidence[];
+}
+
 export interface Student {
   studentId: string;
   fullName: string;
@@ -63,9 +90,8 @@ export interface Student {
   classGroup: string;
   enrolDate: string;
   isActive: boolean;
-  tier?: string;
-  tierStatus?: string;
-  tierPendingReason?: string;
+  elaTier: SubjectTier;
+  mathTier: SubjectTier;
   grade?: string;
   gender?: string;
   ethnicity?: string;
@@ -110,8 +136,10 @@ export interface Assessment {
   score: number | null;
   proficiency: string | null;
   period: string | null;
+  periodRaw?: string | null;
   uploadType: string;
   date: string | null;
+  dateIso?: string | null;
   rawFields?: Record<string, string>;
 }
 
@@ -157,6 +185,8 @@ export interface ParseSummary {
   skippedRows: number;
   duplicates: Student[];
   errors: string[];
+  duplicateAssessments?: number;
+  correctedAssessments?: number;
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -195,6 +225,13 @@ export const studentsApi = {
 
   recalculateTier: (id: string) =>
     request<Student>(`/api/students/${id}/recalculate-tier`, { method: 'POST' }),
+
+  // Per-subject override/finalize — there is no combined tier to set (TR-011).
+  setSubjectTier: (id: string, subject: 'ela' | 'math', data: { tier?: string; status?: string; note?: string }) =>
+    request<Student>(`/api/students/${id}/tier/${subject}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 };
 
 // ─── Assessments ──────────────────────────────────────────────────────────────
@@ -228,10 +265,23 @@ export const uploadApi = {
     ),
 
   recalculateTiers: () =>
-    request<{ message: string; processed: number }>(
+    request<{ message: string; processed: number; updated: number }>(
       '/api/upload/recalculate-tiers',
       { method: 'POST' }
     ),
+
+  // Per-student/subject counted vs excluded evidence — the "why is this student Pending?" report,
+  // and the tool for verifying a re-upload landed correctly after the clean-cutover purge.
+  tierDataQuality: () =>
+    request<{ summary: unknown[]; students: unknown[] }>('/api/upload/tier-data-quality'),
+
+  // Irreversible: deletes every student and assessment document. Requires the exact confirmation
+  // phrase the backend expects. Used once, for the tier-engine clean cutover.
+  purgeAll: (confirm: string) =>
+    request<{ studentsDeleted: number; assessmentsDeleted: number }>('/api/upload/purge-all', {
+      method: 'POST',
+      body: JSON.stringify({ confirm }),
+    }),
 };
 
 // ─── Export ───────────────────────────────────────────────────────────────────
@@ -311,32 +361,78 @@ export const notesApi = {
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
+export type TierSubject = 'ela' | 'math';
+
 export interface GradeRow { grade: string; tier1: number; tier2: number; tier3: number; total: number }
 export interface GradeProficiencyRow { grade: string; above: number; on: number; approaching: number; below: number; totalStudents: number }
 export interface TeacherRow { teacher: string; tier1: number; tier2: number; tier3: number; total: number }
-export interface DrillStudent { studentId: string; fullName: string; tier: string; tierStatus: string; classGroup: string; homeRoom: string | null }
+export interface DrillStudent {
+  studentId: string;
+  fullName: string;
+  elaTier: string | null;
+  elaTierStatus: string;
+  mathTier: string | null;
+  mathTierStatus: string;
+  classGroup: string;
+  homeRoom: string | null;
+}
 export interface TimelinePoint { month: string; year: number; monthKey: string; ela: number | null; math: number | null }
+export interface TierCounts { tier1: number; tier2: number; tier3: number; pending: number }
 export interface DashboardKpis {
   mathProficiencyPct: number | null;
   mathStudentsTotal: number;
   mathStudentsOnAbove: number;
   elaGrowthAvgDelta: number | null;
   elaStudentsWithGrowthData: number;
+  elaTierCounts: TierCounts;
+  mathTierCounts: TierCounts;
 }
 
-export interface GeoZipRow { zip: string; total: number; tier1: number; tier2: number; tier3: number }
+export interface GeoZipRow {
+  zip: string;
+  total: number;
+  elaTier1: number; elaTier2: number; elaTier3: number;
+  mathTier1: number; mathTier2: number; mathTier3: number;
+}
 export interface UnmatchedStnRow { stn: string; uploadType: string; fileName: string; uploadedAt: string }
 
 export const dashboardApi = {
   getTargetGoal: () => request<{ goalPct: number; updatedAt: string; updatedBy: string | null }>('/api/dashboard/target-goal'),
   setTargetGoal: (goalPct: number) => request<{ goalPct: number }>('/api/dashboard/target-goal', { method: 'PUT', body: JSON.stringify({ goalPct }) }),
-  byGrade: () => request<GradeRow[]>('/api/dashboard/by-grade'),
-  teachersByGrade: (grade: string) => request<TeacherRow[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/teachers`),
+  byGrade: (subject: TierSubject = 'ela') => request<GradeRow[]>(`/api/dashboard/by-grade?subject=${subject}`),
+  teachersByGrade: (grade: string, subject: TierSubject = 'ela') =>
+    request<TeacherRow[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/teachers?subject=${subject}`),
   studentsByGrade: (grade: string) => request<DrillStudent[]>(`/api/dashboard/by-grade/${encodeURIComponent(grade)}/students`),
   kpis: () => request<DashboardKpis>('/api/dashboard/kpis'),
   timeline: () => request<TimelinePoint[]>('/api/dashboard/timeline'),
   byGradeProficiency: () => request<GradeProficiencyRow[]>('/api/dashboard/by-grade-proficiency'),
   geographic: () => request<GeoZipRow[]>('/api/dashboard/geographic'),
+};
+
+// ─── Tier ruleset config ───────────────────────────────────────────────────────
+
+export interface TierThreshold { tier: string; minScoreInclusive: number }
+export interface TierRuleset {
+  rulesetVersion: string;
+  effectiveDate: string;
+  description: string;
+  categoryValues: Record<string, Record<string, number>>;
+  sharedCategoryValues: Record<string, number>;
+  evidenceWeights: Record<string, Record<string, number>>;
+  excludedSources: string[];
+  sourceSubjectOverrides: Record<string, string>;
+  tierThresholds: TierThreshold[];
+  minDataPoints: number;
+  scoreDecimals: number;
+  unknownPeriodWeight: number | null;
+  percentileFallbackEnabled: boolean;
+  ixlPeriodFromDateFallback: boolean;
+}
+
+export const configApi = {
+  getTierRules: () => request<TierRuleset>('/api/config/tier-rules'),
+  putTierRules: (data: Partial<TierRuleset>) =>
+    request<TierRuleset>('/api/config/tier-rules', { method: 'PUT', body: JSON.stringify(data) }),
 };
 
 export const unmatchedStnsApi = {

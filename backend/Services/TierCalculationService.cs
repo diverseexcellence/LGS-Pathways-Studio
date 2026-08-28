@@ -5,238 +5,309 @@ namespace LgsImpact.Api.Services;
 public interface ITierCalculationService
 {
     /// <summary>
-    /// Computes a recommended tier for the student based on their current assessments.
-    /// Updates the StudentDocument in Cosmos if a recommendation can be made.
-    /// A system-generated audit entry is written with the reasoning string.
+    /// Computes ELA and Math tier recommendations independently for the student based on their
+    /// current assessments, updates the StudentDocument in Cosmos, and writes an audit entry when
+    /// something actually changed. A subject whose status is already "Finalized" is never touched.
     /// </summary>
     Task ComputeAndApplyAsync(StudentDocument student, int systemAdminId = 0, string systemAdminEmail = "system");
+
+    /// <summary>
+    /// Batched version for bulk recalculation (post-upload, recalculate-all). Fetches all
+    /// assessments and the ruleset once instead of once per student.
+    /// </summary>
+    Task<int> ComputeAndApplyBatchAsync(IReadOnlyList<StudentDocument> students, int systemAdminId = 0, string systemAdminEmail = "system");
 }
 
 public class TierCalculationService(
     ICosmosDbService cosmos,
-    IAuditService audit) : ITierCalculationService
+    IAuditService audit,
+    ILogger<TierCalculationService> logger) : ITierCalculationService
 {
-    // ── Public entry point ────────────────────────────────────────────────────
+    // ── Public entry points ─────────────────────────────────────────────────────
 
-    public async Task ComputeAndApplyAsync(
-        StudentDocument student,
-        int systemAdminId = 0,
-        string systemAdminEmail = "system")
+    public async Task ComputeAndApplyAsync(StudentDocument student, int systemAdminId = 0, string systemAdminEmail = "system")
     {
         var assessments = await cosmos.GetAssessmentsAsync(student.StudentId);
-        var result = Compute(student, assessments);
-
-        // Load ruleset version for audit entry (BRD Task 8)
         var ruleset = await cosmos.GetTierRulesetConfigAsync();
-
-        // Only update if we produced a recommendation (not Pending)
-        if (result.TierStatus == TierStatus.SystemRecommended)
-        {
-            var priorTier       = student.Tier;
-            var priorTierStatus = student.TierStatus;
-
-            student.Tier              = result.Tier!;
-            student.TierStatus        = TierStatus.SystemRecommended;
-            student.TierPendingReason = null;
-            student.LastUpdated       = DateTime.UtcNow.ToString("o");
-            await cosmos.UpsertStudentAsync(student);
-
-            await audit.LogAsync(
-                adminId:    systemAdminId,
-                adminEmail: systemAdminEmail,
-                eventType:  AuditEventType.TierRecommendation,
-                entityType: "Student",
-                entityId:   student.StudentId,
-                details:    $"System Tier Recommendation Generated — {student.FullName}: {result.Tier} | {result.Reasoning} | Prior: {priorTier}/{priorTierStatus} | Ruleset v{ruleset.RulesetVersion}");
-        }
-        else if (result.TierStatus == TierStatus.Pending && student.TierStatus != TierStatus.Finalized)
-        {
-            // Keep as Pending but record why (insufficient data) — BRD Task 4
-            student.TierStatus        = TierStatus.Pending;
-            student.TierPendingReason = result.PendingReason;
-            student.LastUpdated       = DateTime.UtcNow.ToString("o");
-            await cosmos.UpsertStudentAsync(student);
-        }
+        await ApplyOneAsync(student, assessments, ruleset, systemAdminId, systemAdminEmail);
     }
 
-    // ── Core calculation (pure, no I/O — testable independently) ─────────────
-
-    public static TierResult Compute(StudentDocument student, List<AssessmentDocument> assessments)
+    public async Task<int> ComputeAndApplyBatchAsync(IReadOnlyList<StudentDocument> students, int systemAdminId = 0, string systemAdminEmail = "system")
     {
-        var grade = ParseGrade(student.Grade);
+        var ruleset = await cosmos.GetTierRulesetConfigAsync();
+        var allAssessments = await cosmos.GetAllAssessmentsAsync();
+        var byStudent = allAssessments.GroupBy(a => a.StudentId).ToDictionary(g => g.Key, g => g.ToList());
 
-        // Step 1: most recent assessment per normalised subject
-        var latestEla  = assessments
-            .Where(a => NormalizeSubject(a.Subject) == "ELA")
-            .OrderByDescending(a => a.Date)
-            .FirstOrDefault();
-
-        var latestMath = assessments
-            .Where(a => NormalizeSubject(a.Subject) == "Math")
-            .OrderByDescending(a => a.Date)
-            .FirstOrDefault();
-
-        // Reading (Acadience / I-Read) — used for K-2 single-subject fallback
-        var latestReading = assessments
-            .Where(a => NormalizeSubject(a.Subject) == "Reading")
-            .OrderByDescending(a => a.Date)
-            .FirstOrDefault();
-
-        // Step 2: resolve On/Above for each subject
-        bool? elaOnAbove  = ResolveOnAbove(latestEla);
-        bool? mathOnAbove = ResolveOnAbove(latestMath);
-
-        // K-2 single-subject rule: if Math missing but Reading present, use Reading as proxy
-        if (mathOnAbove is null && grade is >= 0 and <= 2 && latestReading != null)
-            mathOnAbove = ResolveOnAbove(latestReading);
-
-        // If ELA also missing but Reading present for K-2, use Reading as ELA proxy too
-        if (elaOnAbove is null && grade is >= 0 and <= 2 && latestReading != null)
-            elaOnAbove = ResolveOnAbove(latestReading);
-
-        // Step 3: combine
-        if (elaOnAbove is null && mathOnAbove is null)
+        var updated = 0;
+        foreach (var student in students)
         {
-            var noAssessments = (latestEla is null && latestMath is null && latestReading is null);
-            var pendingReason = noAssessments ? "no_assessments" : "no_proficiency_or_percentile";
-            return new TierResult(
-                TierStatus.Pending, null,
-                "Pending: no assessments with evaluable proficiency or percentile data.",
-                pendingReason);
+            try
+            {
+                byStudent.TryGetValue(student.StudentId, out var assessments);
+                var changed = await ApplyOneAsync(student, assessments ?? new List<AssessmentDocument>(), ruleset, systemAdminId, systemAdminEmail);
+                if (changed) updated++;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Tier recalculation failed for student {StudentId}", student.StudentId);
+            }
         }
-
-        if (elaOnAbove is null || mathOnAbove is null)
-        {
-            // Single subject available — use it for both signals
-            var onAbove = elaOnAbove ?? mathOnAbove!.Value;
-            var subjectLabel = elaOnAbove.HasValue
-                ? DescribeAssessment(latestEla, "ELA")
-                : DescribeAssessment(latestMath ?? latestReading, mathOnAbove.HasValue ? "Math" : "Reading");
-
-            var tier = onAbove ? "Tier 1" : "Tier 3";
-            var reasoning = $"Single-subject evaluation ({subjectLabel} → {(onAbove ? "On/Above" : "Below")}). " +
-                            "Second subject data unavailable; same signal used for both.";
-            return new TierResult(TierStatus.SystemRecommended, tier, reasoning);
-        }
-
-        // Both signals available
-        var elaTier  = elaOnAbove.Value;
-        var mathTier = mathOnAbove.Value;
-
-        string resultTier;
-        string tierReasoning;
-
-        if (elaTier && mathTier)
-        {
-            resultTier    = "Tier 1";
-            tierReasoning = $"Based on {DescribeAssessment(latestEla, "ELA")} → On/Above and " +
-                            $"{DescribeAssessment(latestMath, "Math")} → On/Above.";
-        }
-        else if (!elaTier && !mathTier)
-        {
-            resultTier    = "Tier 3";
-            tierReasoning = $"Based on {DescribeAssessment(latestEla, "ELA")} → Below and " +
-                            $"{DescribeAssessment(latestMath, "Math")} → Below.";
-        }
-        else
-        {
-            resultTier    = "Tier 2";
-            var elaLabel  = $"{DescribeAssessment(latestEla, "ELA")} → {(elaTier ? "On/Above" : "Below")}";
-            var mathLabel = $"{DescribeAssessment(latestMath, "Math")} → {(mathTier ? "On/Above" : "Below")}";
-            tierReasoning = $"Based on {elaLabel} and {mathLabel}.";
-        }
-
-        return new TierResult(TierStatus.SystemRecommended, resultTier, tierReasoning);
+        return updated;
     }
 
-    // ── Proficiency resolution (BRD section 10.1) ─────────────────────────────
-
-    private static bool? ResolveOnAbove(AssessmentDocument? assessment)
+    private async Task<bool> ApplyOneAsync(
+        StudentDocument student,
+        List<AssessmentDocument> assessments,
+        TierRulesetConfigDocument ruleset,
+        int systemAdminId,
+        string systemAdminEmail)
     {
-        if (assessment is null) return null;
+        var computation = ComputeAll(student, assessments, ruleset);
+        var now = DateTime.UtcNow.ToString("o");
 
-        var p = assessment.Proficiency?.Trim();
+        var elaChanged = ApplySubject(student.ElaTier, computation.Ela, computation.RulesetVersion, now);
+        var mathChanged = ApplySubject(student.MathTier, computation.Math, computation.RulesetVersion, now);
 
-        if (!string.IsNullOrWhiteSpace(p))
+        if (!elaChanged && !mathChanged) return false;
+
+        student.LastUpdated = now;
+        await cosmos.UpsertStudentAsync(student);
+
+        await audit.LogAsync(
+            adminId: systemAdminId,
+            adminEmail: systemAdminEmail,
+            eventType: AuditEventType.TierRecommendation,
+            entityType: "Student",
+            entityId: student.StudentId,
+            details: $"System Tier Recommendation — {student.FullName}: " +
+                     $"ELA {DescribeChange(computation.Ela)} | Math {DescribeChange(computation.Math)} | " +
+                     $"Ruleset v{computation.RulesetVersion}");
+
+        return true;
+    }
+
+    // A subject that is already Finalized is never overwritten by the system.
+    private static bool ApplySubject(SubjectTier target, SubjectTierComputation result, string rulesetVersion, string now)
+    {
+        if (target.Status == "Finalized") return false;
+
+        var changed = target.Tier != result.Tier
+            || target.Status != result.Status
+            || target.Score != result.Score
+            || target.DataPoints != result.DataPoints;
+
+        if (!changed) return false;
+
+        target.Tier = result.Tier;
+        target.Status = result.Status;
+        target.Score = result.Score;
+        target.DataPoints = result.DataPoints;
+        target.PendingReason = result.PendingReason;
+        target.Reasoning = result.Reasoning;
+        target.RulesetVersion = rulesetVersion;
+        target.ComputedAt = now;
+        target.Evidence = result.Evidence.Take(24).ToList();
+        return true;
+    }
+
+    private static string DescribeChange(SubjectTierComputation r) =>
+        r.Status == "Pending" ? $"Pending ({r.PendingReason})" : $"{r.Tier} (score {r.Score:0.00}, {r.DataPoints} pts)";
+
+    // ── Core calculation (pure, no I/O — testable independently) ─────────────────
+
+    public static StudentTierComputation ComputeAll(StudentDocument student, IReadOnlyList<AssessmentDocument> assessments, TierRulesetConfigDocument ruleset)
+    {
+        var ela = ComputeSubject("ELA", assessments, ruleset);
+        var math = ComputeSubject("Math", assessments, ruleset);
+        return new StudentTierComputation(ela, math, ruleset.RulesetVersion);
+    }
+
+    public static SubjectTierComputation ComputeSubject(string subject, IReadOnlyList<AssessmentDocument> assessments, TierRulesetConfigDocument ruleset)
+    {
+        var candidates = assessments.Where(a => MapSubject(a, ruleset) == subject).ToList();
+
+        var evidence = new List<TierEvidenceRecord>();
+        var resolved = new List<ResolvedEvidence>();
+
+        foreach (var a in candidates)
         {
-            // Explicit tier strings
-            if (p.Equals("Tier 1", StringComparison.OrdinalIgnoreCase)) return true;
-            if (p.Equals("Tier 2", StringComparison.OrdinalIgnoreCase)) return false;
-            if (p.Equals("Tier 3", StringComparison.OrdinalIgnoreCase)) return false;
+            var source = a.UploadType ?? "Unknown";
+            var rec = new TierEvidenceRecord
+            {
+                AssessmentId = a.Id,
+                Source = source,
+                Category = a.Proficiency,
+                Date = a.DateIso ?? a.Date,
+            };
 
-            // Below signals (check before "above" to avoid substring collision on "far below above")
-            if (ContainsAny(p, "far below", "below", "approaching")) return false;
+            if (ruleset.ExcludedSources.Contains(source, StringComparer.OrdinalIgnoreCase))
+            {
+                rec.Counted = false;
+                rec.ExclusionReason = "source_excluded";
+                evidence.Add(rec);
+                continue;
+            }
 
-            // On/Above signals
-            if (ContainsAny(p, "above", "on grade", "at grade", "at proficiency",
-                               "proficient", "meets", "exceeds", "mid above", "early on")) return true;
+            if (!PerformanceLevelNormalizer.TryResolve(source, a.Proficiency, ruleset, out var value))
+            {
+                rec.Counted = false;
+                rec.ExclusionReason = "unrecognized_category";
+                evidence.Add(rec);
+                continue;
+            }
+            rec.Value = value;
+
+            var periodKey = AssessmentNormalization.ResolvePeriodKey(source, a.Period, a.PeriodRaw, a.FileName);
+            rec.Period = periodKey;
+
+            double? weight = null;
+            if (periodKey is not null && ruleset.EvidenceWeights.TryGetValue(source, out var weights))
+            {
+                if (weights.TryGetValue(periodKey, out var w)) weight = w;
+                else if (weights.TryGetValue("*", out var wildcard)) weight = wildcard;
+            }
+            weight ??= ruleset.UnknownPeriodWeight;
+
+            if (weight is null)
+            {
+                rec.Counted = false;
+                rec.ExclusionReason = "unknown_period";
+                evidence.Add(rec);
+                continue;
+            }
+            rec.Weight = weight;
+
+            resolved.Add(new ResolvedEvidence(a, rec, source, periodKey, value, weight.Value));
         }
 
-        // Percentile fallback (40th-percentile cutoff — confirmed 2026-06-12)
-        var percentileValue = ExtractPercentile(assessment);
-        if (percentileValue.HasValue)
-            return percentileValue.Value >= 40;
+        // Latest-wins dedup within (source, subject, periodKey). Never compare raw Date strings.
+        var winners = resolved
+            .GroupBy(r => (r.Source.ToLowerInvariant(), r.PeriodKey?.ToUpperInvariant() ?? ""))
+            .Select(g => g
+                .OrderByDescending(r => TryParseIso(r.Assessment.DateIso))
+                .ThenByDescending(r => TryParseIso(AssessmentNormalization.TryParseFlexibleDate(r.Assessment.Date, r.Source, out _)))
+                .ThenByDescending(r => TryParseIso(r.Assessment.UploadedAt))
+                .ThenByDescending(r => r.Assessment.Id, StringComparer.Ordinal)
+                .ToList())
+            .ToList();
 
-        return null; // unresolvable
-    }
+        var countedEvidence = new List<TierEvidenceRecord>();
+        double weightedSum = 0, weightSum = 0;
 
-    private static double? ExtractPercentile(AssessmentDocument assessment)
-    {
-        // Check the typed Score field if the subject implies a percentile context
-        foreach (var kv in assessment.RawFields)
+        foreach (var group in winners)
         {
-            if (kv.Key.Contains("percentile", StringComparison.OrdinalIgnoreCase) &&
-                double.TryParse(kv.Value, System.Globalization.NumberStyles.Any,
-                                System.Globalization.CultureInfo.InvariantCulture, out var pct))
-                return pct;
+            var winner = group[0];
+            winner.Record.Counted = true;
+            countedEvidence.Add(winner.Record);
+            weightedSum += winner.Value * winner.Weight;
+            weightSum += winner.Weight;
+
+            foreach (var loser in group.Skip(1))
+            {
+                loser.Record.Counted = false;
+                loser.Record.ExclusionReason = "superseded";
+                evidence.Add(loser.Record);
+            }
         }
-        return null;
+
+        var allEvidence = countedEvidence.Concat(evidence).ToList();
+        var dataPoints = countedEvidence.Count;
+
+        if (dataPoints < ruleset.MinDataPoints)
+        {
+            string pendingReason;
+            if (candidates.Count == 0) pendingReason = "no_assessments";
+            else if (dataPoints == 0) pendingReason = "all_evidence_excluded";
+            else pendingReason = "insufficient_data_points";
+
+            double? provisionalScore = dataPoints > 0
+                ? Math.Round(weightedSum / weightSum, ruleset.ScoreDecimals, MidpointRounding.AwayFromZero)
+                : null;
+
+            var reasoning = $"{subject}: Pending / Review — {dataPoints} of {ruleset.MinDataPoints} required data point(s). " +
+                            BuildExclusionClause(evidence) + $" Ruleset v{ruleset.RulesetVersion}.";
+
+            return new SubjectTierComputation(subject, "Pending", null, provisionalScore, dataPoints,
+                reasoning.Trim(), pendingReason, weightedSum, weightSum, allEvidence);
+        }
+
+        var score = Math.Round(weightedSum / weightSum, ruleset.ScoreDecimals, MidpointRounding.AwayFromZero);
+        var tier = ruleset.TierThresholds
+            .OrderByDescending(t => t.MinScoreInclusive)
+            .FirstOrDefault(t => score >= t.MinScoreInclusive)?.Tier
+            ?? ruleset.TierThresholds.OrderBy(t => t.MinScoreInclusive).First().Tier;
+
+        var countedDesc = string.Join(", ", countedEvidence.Take(12)
+            .Select(e => $"{e.Source} {e.Period} \"{e.Category}\" ({e.Value}×{e.Weight:0.0})"));
+        var extra = countedEvidence.Count > 12 ? $" (+{countedEvidence.Count - 12} more)" : "";
+
+        var fullReasoning = $"{subject} {tier} — weighted score {score:0.00} (Σ value×weight {weightedSum:0.00} ÷ Σ weight {weightSum:0.00}) " +
+                             $"from {dataPoints} data point(s): {countedDesc}{extra}. " +
+                             BuildExclusionClause(evidence) + $" Ruleset v{ruleset.RulesetVersion}.";
+
+        return new SubjectTierComputation(subject, "System Recommended", tier, score, dataPoints,
+            fullReasoning.Trim(), null, weightedSum, weightSum, allEvidence);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private static string NormalizeSubject(string? subject)
+    private static string BuildExclusionClause(List<TierEvidenceRecord> excluded)
     {
-        if (subject is null) return "Unknown";
-        if (subject.Contains("ELA", StringComparison.OrdinalIgnoreCase) ||
-            subject.Contains("English", StringComparison.OrdinalIgnoreCase) ||
-            subject.Contains("Language", StringComparison.OrdinalIgnoreCase)) return "ELA";
-        if (subject.Contains("Math", StringComparison.OrdinalIgnoreCase)) return "Math";
-        if (subject.Contains("Reading", StringComparison.OrdinalIgnoreCase)) return "Reading";
-        return subject;
+        if (excluded.Count == 0) return "";
+        var items = excluded.Take(5)
+            .Select(e => $"{e.Source} {e.Date ?? "n/a"} \"{e.Category ?? "n/a"}\" ({e.ExclusionReason})");
+        var extra = excluded.Count > 5 ? $" (+{excluded.Count - 5} more)" : "";
+        return $"Excluded: {string.Join("; ", items)}{extra}.";
     }
 
-    private static string DescribeAssessment(AssessmentDocument? a, string subjectLabel)
+    private static DateTime TryParseIso(string? iso) =>
+        !string.IsNullOrWhiteSpace(iso) && DateTime.TryParse(iso, null,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var dt) ? dt : DateTime.MinValue;
+
+    /// <summary>Maps an assessment to ELA/Math/null using the ruleset's source overrides first
+    /// (Acadience always -&gt; ELA), then the generic subject text.</summary>
+    private static string? MapSubject(AssessmentDocument a, TierRulesetConfigDocument ruleset)
     {
-        if (a is null) return $"{subjectLabel} (no data)";
-        var proficiency = string.IsNullOrWhiteSpace(a.Proficiency) ? "no label" : a.Proficiency;
-        return $"{subjectLabel} ({a.UploadType}: {proficiency})";
+        if (a.UploadType is not null && ruleset.SourceSubjectOverrides.TryGetValue(a.UploadType, out var overrideSubject))
+            return overrideSubject;
+
+        var normalized = AssessmentNormalization.NormalizeSubject(a.Subject);
+        return normalized switch
+        {
+            "ELA" => "ELA",
+            "Reading" => "ELA",
+            "Math" => "Math",
+            _ => null,
+        };
     }
 
-    private static int? ParseGrade(string? grade)
-    {
-        if (grade is null) return null;
-        var g = grade.Trim().ToUpperInvariant();
-        // "-1" is LGS's source code for Kindergarten (confirmed by Velvet Wright on the
-        // 2026-08-14 demo call). It must normalise to 0, not parse as -1: the K-2 Reading
-        // proxy below tests `grade is >= 0 and <= 2`, so a raw -1 fell outside that range
-        // and Kindergarteners with only Reading data were left permanently Pending.
-        if (g is "K" or "KG" or "KINDERGARTEN" or "-1") return 0;
-        if (int.TryParse(g, out var n)) return n;
-        return null;
-    }
-
-    private static bool ContainsAny(string source, params string[] terms)
-        => terms.Any(t => source.Contains(t, StringComparison.OrdinalIgnoreCase));
+    private record ResolvedEvidence(AssessmentDocument Assessment, TierEvidenceRecord Record, string Source, string? PeriodKey, int Value, double Weight);
 }
 
-// ── Value objects ─────────────────────────────────────────────────────────────
+// ── Value objects ───────────────────────────────────────────────────────────────
 
 public static class TierStatus
 {
-    public const string Pending             = "Pending";
-    public const string SystemRecommended   = "System Recommended";
-    public const string Finalized           = "Finalized";
+    public const string Pending = "Pending";
+    public const string SystemRecommended = "System Recommended";
+    public const string Finalized = "Finalized";
 }
 
-public record TierResult(string TierStatus, string? Tier, string Reasoning, string? PendingReason = null);
+public static class TierPendingReason
+{
+    public const string NoAssessments = "no_assessments";
+    public const string InsufficientDataPoints = "insufficient_data_points";
+    public const string AllEvidenceExcluded = "all_evidence_excluded";
+}
+
+public record SubjectTierComputation(
+    string Subject,
+    string Status,
+    string? Tier,
+    double? Score,
+    int DataPoints,
+    string Reasoning,
+    string? PendingReason,
+    double WeightedSum,
+    double WeightSum,
+    IReadOnlyList<TierEvidenceRecord> Evidence);
+
+public record StudentTierComputation(SubjectTierComputation Ela, SubjectTierComputation Math, string RulesetVersion);
