@@ -61,6 +61,9 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         if (dto.ClassGroup is not null) { student.ClassGroup = dto.ClassGroup; changed.Add($"ClassGroup→{dto.ClassGroup}"); }
         if (dto.Grade is not null) { student.Grade = dto.Grade; changed.Add($"Grade→{dto.Grade}"); }
         if (dto.HomeRoom is not null) { student.HomeRoom = dto.HomeRoom; changed.Add($"HomeRoom→{dto.HomeRoom}"); }
+        if (dto.Stn is not null) { student.Stn = dto.Stn; changed.Add($"STN→{dto.Stn}"); }
+        if (dto.LocalId is not null) { student.LocalId = dto.LocalId; changed.Add($"LocalId→{dto.LocalId}"); }
+        if (dto.Dob is not null) { student.Dob = dto.Dob; changed.Add($"DOB→{dto.Dob}"); }
         student.LastUpdated = DateTime.UtcNow.ToString("o");
 
         // classGroup is the Cosmos partition key — changing it without deleting the old
@@ -227,8 +230,75 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         var merged = await cosmos.DeduplicateStudentsAsync();
         return Ok(new { merged });
     }
+
+    /// <summary>
+    /// Copy STN and DOB from assessment rawFields onto students who were auto-created from IXL
+    /// without identifiers. ILEARN rows store both even when the student record does not.
+    /// STN and DOB are filled independently — a student who already has STN still gets DOB.
+    /// </summary>
+    [HttpPost("backfill-stn")]
+    public async Task<IActionResult> BackfillStn()
+    {
+        var (students, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
+        var stnUpdated = 0;
+        var dobUpdated = 0;
+        var unmatched = 0;
+
+        foreach (var student in students)
+        {
+            var needStn = string.IsNullOrWhiteSpace(student.Stn);
+            var needDob = string.IsNullOrWhiteSpace(student.Dob);
+            if (!needStn && !needDob) continue;
+
+            var assessments = await cosmos.GetAssessmentsAsync(student.StudentId);
+            string? stn = null;
+            string? dob = null;
+            foreach (var a in assessments)
+            {
+                if (needStn)
+                    stn ??= ExtractRaw(a.RawFields, "STN", "State_StudentNumber", "State Student Number", "SSID", "ILEARN Student ID");
+                if (needDob)
+                    dob ??= ExtractRaw(a.RawFields, "DOB", "Date of Birth", "Birth Date", "Student DOB");
+                if ((!needStn || stn is not null) && (!needDob || dob is not null)) break;
+            }
+
+            var dirty = false;
+            if (needStn && !string.IsNullOrWhiteSpace(stn)) { student.Stn = stn; stnUpdated++; dirty = true; }
+            if (needDob && !string.IsNullOrWhiteSpace(dob)) { student.Dob = dob; dobUpdated++; dirty = true; }
+            if (!dirty) { unmatched++; continue; }
+
+            student.LastUpdated = DateTime.UtcNow.ToString("o");
+            await cosmos.UpsertStudentAsync(student);
+        }
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Edit, entityType: "StudentList",
+            details: $"Backfilled identifiers from assessments — STN {stnUpdated}, DOB {dobUpdated}, unmatched {unmatched}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(new { stnUpdated, dobUpdated, unmatched });
+    }
+
+    private static string? ExtractRaw(Dictionary<string, string> raw, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var match = raw.Keys.FirstOrDefault(k =>
+                k.Equals(key, StringComparison.OrdinalIgnoreCase) ||
+                k.EndsWith("." + key, StringComparison.OrdinalIgnoreCase) ||
+                (k.Contains(key, StringComparison.OrdinalIgnoreCase) &&
+                 !k.Contains("name", StringComparison.OrdinalIgnoreCase)));
+            if (match is null) continue;
+            var value = raw[match].Trim();
+            if (string.IsNullOrWhiteSpace(value)) continue;
+            if (value.Equals("[REDACTED]", StringComparison.OrdinalIgnoreCase)) continue;
+            if (value.Equals("N/A", StringComparison.OrdinalIgnoreCase)) continue;
+            return value;
+        }
+        return null;
+    }
 }
 
-public record StudentUpdateDto(string? ClassGroup, string? Grade, string? HomeRoom);
+public record StudentUpdateDto(string? ClassGroup, string? Grade, string? HomeRoom, string? Stn, string? LocalId, string? Dob);
 public record SetSubjectTierDto(string? Tier, string? Status, string? Note);
 public record CreateNoteDto(string Text);

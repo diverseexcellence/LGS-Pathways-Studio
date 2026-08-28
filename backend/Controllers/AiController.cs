@@ -74,14 +74,18 @@ public class AiController(
         catch (Exception ex)
         {
             // Task 31: structured audit entry on LLM failure
-            var errorType = ex is HttpRequestException ? "connection_failed"
-                          : ex is TaskCanceledException  ? "timeout"
+            var errorType = ex is TaskCanceledException ? "timeout"
+                          : ex is InvalidOperationException ? "config"
+                          : ex is HttpRequestException ? "provider_error"
                           : "unknown";
             await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
                 AuditEventType.Error, entityType: "AiSummary", entityId: studentId,
                 details: $"LLM error [{errorType}] provider={llm.ModelName}: {ex.Message}",
                 ip: HttpContext.Connection.RemoteIpAddress?.ToString());
-            return StatusCode(503, new { message = $"AI service unavailable. Provider: {llm.ModelName}. Check that the LLM service is running." });
+            var hint = errorType == "timeout" ? "The request timed out."
+                     : errorType == "config" ? "The LLM API key is not configured."
+                     : "The LLM provider rejected the request. Check the model name and API key.";
+            return StatusCode(503, new { message = $"AI service unavailable ({llm.ModelName}). {hint}" });
         }
 
         var summary = new AiSummaryDocument

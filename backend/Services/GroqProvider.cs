@@ -4,23 +4,38 @@ using System.Text.Json;
 namespace LgsImpact.Api.Services;
 
 /// <summary>
-/// Groq cloud provider — free-tier hosted inference, OpenAI-compatible API.
-/// Serves Meta Llama models (llama-3.1-8b-instant, llama-3.3-70b-versatile, etc.)
-/// without any self-hosted infrastructure. No Ollama required.
+/// Groq cloud provider — hosted inference, OpenAI-compatible API.
 ///
 /// Config:
 ///   LlmProvider:Name    = "groq"
-///   LlmProvider:ApiKey  = "<your-groq-api-key>"   (also readable from env GROQ_API_KEY)
-///   LlmProvider:Model   = "llama-3.1-8b-instant"  (default)
+///   LlmProvider:ApiKey  = "&lt;your-groq-api-key&gt;"   (also readable from env GROQ_API_KEY)
+///   LlmProvider:Model   = "openai/gpt-oss-20b"  (default)
 ///
 /// Get a free API key at https://console.groq.com
+/// Groq decommissioned llama-3.1-8b-instant for free/developer tiers on 2026-08-16
+/// (replacement: openai/gpt-oss-20b). Retired IDs are remapped automatically.
 /// </summary>
 public class GroqProvider(IConfiguration config, IHttpClientFactory httpFactory) : ILlmService
 {
     private const string BaseUrl = "https://api.groq.com/openai/v1/chat/completions";
-    private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
+    private const string DefaultModel = "openai/gpt-oss-20b";
 
-    public string ModelName => config["LlmProvider:Model"] ?? "llama-3.1-8b-instant";
+    // Groq shutdown 2026-08-16 for free/developer tiers. Map to the documented replacement
+    // so Azure App Settings that still name the old model keep working after deploy.
+    private static readonly Dictionary<string, string> RetiredModelReplacements =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["llama-3.1-8b-instant"] = "openai/gpt-oss-20b",
+            ["llama-3.3-70b-versatile"] = "openai/gpt-oss-120b",
+        };
+
+    public string ModelName => ResolveModel(config["LlmProvider:Model"]);
+
+    private static string ResolveModel(string? configured)
+    {
+        var model = string.IsNullOrWhiteSpace(configured) ? DefaultModel : configured.Trim();
+        return RetiredModelReplacements.TryGetValue(model, out var replacement) ? replacement : model;
+    }
 
     private string ApiKey =>
         config["LlmProvider:ApiKey"]
@@ -46,16 +61,33 @@ public class GroqProvider(IConfiguration config, IHttpClientFactory httpFactory)
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
 
         using var res = await client.SendAsync(req, ct);
-        res.EnsureSuccessStatusCode();
-
         var json = await res.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(json);
+        if (!res.IsSuccessStatusCode)
+            throw new HttpRequestException($"Groq {(int)res.StatusCode}: {ExtractGroqError(json)}");
 
+        using var doc = JsonDocument.Parse(json);
         return doc.RootElement
             .GetProperty("choices")[0]
             .GetProperty("message")
             .GetProperty("content")
             .GetString()
             ?? "Summary unavailable.";
+    }
+
+    private static string ExtractGroqError(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("error", out var err))
+            {
+                if (err.ValueKind == JsonValueKind.Object && err.TryGetProperty("message", out var msg))
+                    return msg.GetString() ?? json;
+                if (err.ValueKind == JsonValueKind.String)
+                    return err.GetString() ?? json;
+            }
+        }
+        catch (JsonException) { /* body was not JSON */ }
+        return json.Length > 300 ? json[..300] : json;
     }
 }

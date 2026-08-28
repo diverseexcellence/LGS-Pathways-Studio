@@ -232,6 +232,11 @@ export const studentsApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+
+  backfillStn: () =>
+    request<{ stnUpdated: number; dobUpdated: number; unmatched: number }>('/api/students/backfill-stn', {
+      method: 'POST',
+    }),
 };
 
 // ─── Assessments ──────────────────────────────────────────────────────────────

@@ -315,7 +315,7 @@ export default function StudentProfile() {
       const summary = await aiApi.generate(studentId);
       setAiSummary(summary);
     } catch (e: any) {
-      alert(e.message || 'AI summary generation failed. Ensure Ollama is running.');
+      alert(e.message || 'AI summary generation failed.');
     } finally {
       setIsGeneratingAI(false);
     }
