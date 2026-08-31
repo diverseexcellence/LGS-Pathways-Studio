@@ -152,7 +152,7 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
         ws.Cells[2, 1].Style.Fill.PatternType = ExcelFillStyle.Solid;
         ws.Cells[2, 1].Style.Fill.BackgroundColor.SetColor(Color.LightYellow);
 
-        string[] headers = ["ID", "Full Name", "DOB", "Class", "Grade", "Gender", "Ethnicity", "ELL",
+        string[] headers = ["STN", "Full Name", "DOB", "Class", "Grade", "Gender", "Ethnicity", "ELL",
                             "ELA Tier", "ELA Status", "ELA Score", "ELA Data Pts",
                             "Math Tier", "Math Status", "Math Score", "Math Data Pts"];
         for (int i = 0; i < headers.Length; i++)
@@ -168,7 +168,7 @@ public class ExportController(ICosmosDbService cosmos, IBlobStorageService blob,
         {
             var s = students[r];
             int row = r + 4;
-            ws.Cells[row, 1].Value  = s.StudentId;
+            ws.Cells[row, 1].Value  = s.Stn;
             ws.Cells[row, 2].Value  = s.FullName;
             ws.Cells[row, 3].Value  = s.Dob;
             ws.Cells[row, 4].Value  = s.ClassGroup;
