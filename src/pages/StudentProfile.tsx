@@ -965,6 +965,31 @@ export default function StudentProfile() {
                 ))}
               </div>
 
+              {/* Provenance — which file this row came from, and when it was ingested.
+                  Needed to tell a duplicate re-import apart from two genuinely different source files. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-4 rounded-lg border border-slate-100 text-sm mb-4">
+                <div>
+                  <span className="block text-xs text-slate-500 font-medium mb-0.5">Source File</span>
+                  <span className="text-slate-900 font-mono text-xs break-all">{selectedAssessment.fileName || 'Unknown'}</span>
+                </div>
+                <div>
+                  <span className="block text-xs text-slate-500 font-medium mb-0.5">Imported At</span>
+                  <span className="text-slate-900 font-medium">
+                    {selectedAssessment.uploadedAt ? formatDate(selectedAssessment.uploadedAt) : 'Unknown'}
+                  </span>
+                </div>
+                {selectedAssessment.periodRaw && (
+                  <div>
+                    <span className="block text-xs text-slate-500 font-medium mb-0.5">Period (raw)</span>
+                    <span className="text-slate-900 font-mono text-xs">{selectedAssessment.periodRaw}</span>
+                  </div>
+                )}
+                <div>
+                  <span className="block text-xs text-slate-500 font-medium mb-0.5">Record ID</span>
+                  <span className="text-slate-900 font-mono text-xs break-all">{selectedAssessment.id}</span>
+                </div>
+              </div>
+
 
               <div className="mt-6 flex justify-end">
                 <button onClick={() => setSelectedAssessment(null)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">

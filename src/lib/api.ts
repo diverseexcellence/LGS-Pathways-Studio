@@ -140,6 +140,8 @@ export interface Assessment {
   uploadType: string;
   date: string | null;
   dateIso?: string | null;
+  fileName?: string;
+  uploadedAt?: string;
   rawFields?: Record<string, string>;
 }
 
