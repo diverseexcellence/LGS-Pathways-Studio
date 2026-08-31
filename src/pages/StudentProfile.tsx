@@ -487,8 +487,8 @@ export default function StudentProfile() {
 
         {/* Footer: source line + entry/exit + demographics link (BRD §8.3.2) */}
         <div className="px-6 pb-4 flex flex-wrap items-center gap-4 text-xs text-slate-400">
-          {student.fileName && (
-            <span>Source: <span className="text-slate-600 font-mono">{student.fileName}</span></span>
+          {student.sourceFile && (
+            <span>Source: <span className="text-slate-600 font-mono">{student.sourceFile}</span></span>
           )}
           {student.entryDate && (
             <span>Entry: <span className="text-slate-600">{new Date(student.entryDate).toLocaleDateString()}</span></span>
@@ -916,7 +916,7 @@ export default function StudentProfile() {
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Source Reference</p>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                   {[
-                    ['Source File', student.fileName || 'Unknown'],
+                    ['Source File', student.sourceFile || 'Unknown'],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span className="block text-xs text-slate-400 font-medium">{label}</span>

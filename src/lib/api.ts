@@ -103,7 +103,7 @@ export interface Student {
   entryDate?: string;
   exitDate?: string;
   lunchStatus?: string;
-  fileName?: string;
+  sourceFile?: string;
 }
 
 export interface AuditEntry {
