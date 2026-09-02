@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, FileText, CheckCircle, AlertCircle, Trash2, History, XCircle, Search, X, ShieldAlert, Download, RefreshCw, Cloud } from 'lucide-react';
 import { uploadApi, exportApi, unmatchedStnsApi, ParseSummary, UploadLog, UnmatchedStnRow } from '../lib/api';
+import { formatUsDateMedium, formatUsTime } from '../lib/dates';
 
 const UPLOAD_TYPES = [
   { value: 'demographics', label: 'PowerSchool Demographics' },
@@ -519,7 +520,7 @@ export default function DataIngestion() {
                           <td className="px-3 py-2 text-slate-600">{r.uploadType}</td>
                           <td className="px-3 py-2 text-slate-500 break-all max-w-[200px]">{r.fileName}</td>
                           <td className="px-3 py-2 text-slate-400 whitespace-nowrap">
-                            {new Date(r.uploadedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            {formatUsDateMedium(r.uploadedAt)}
                           </td>
                         </tr>
                       ))}
@@ -631,9 +632,9 @@ export default function DataIngestion() {
                   filteredLogs.map((log) => (
                     <tr key={log.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-3 py-2 text-slate-400 text-xs whitespace-nowrap">
-                        {new Date(log.uploadedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}
+                        {formatUsDateMedium(log.uploadedAt)}
                         <span className="block text-slate-300">
-                          {new Date(log.uploadedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                          {formatUsTime(log.uploadedAt)}
                         </span>
                       </td>
                       <td className="px-3 py-2 font-medium text-slate-800">

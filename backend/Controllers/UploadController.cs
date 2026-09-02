@@ -1005,9 +1005,17 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                                             "Status", "Achievement Level",
                                             "Overall math tier", "Overall ELA tier", "Overall reading tier",
                                             "Reading Composite Status");
-                    var periodRaw = GetVal(row, "Period", "Term", "School Year", "Benchmark Period",
+                    // "Test Reason" and "Test Name" come first because that is where Indiana's
+                    // ILEARN exports actually put the checkpoint ("ILEARN Checkpoint 3" /
+                    // "ILEARN Mathematics Grade 6 Checkpoint 3, Opp 1: ..."). "Test OppNumber"
+                    // holds "First Assessment", which identifies the attempt, not the checkpoint —
+                    // when it was probed first, the period could only be recovered from the
+                    // filename, so an export named ..._150626 PM.csv lost its period entirely and
+                    // had to be renamed by hand before upload.
+                    var periodRaw = GetVal(row, "Period", "Term", "Benchmark Period",
+                                        "Test Reason", "Test Name",
                                         "Test OppNumber", "Assessment Window", "Test Window", "Checkpoint",
-                                        "Diagnostic Window", "Snapshot");
+                                        "Diagnostic Window", "Snapshot", "School Year");
                     var date = GetVal(row, "Date", "Date Taken", "Date of completion",
                                       "Test Date", "Reading Composite Date");
 
@@ -1021,6 +1029,22 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     // fallback — the tier engine excludes evidence it cannot weight rather than
                     // silently defaulting a weight.
                     var period = AssessmentNormalization.NormalizePeriod(uploadType, periodRaw, fileName);
+
+                    // The filename is a fallback, not a source of truth. Before "Test Reason" was
+                    // probed, a CP3 export had to be renamed by hand to be recognised — and a
+                    // mistyped rename would have applied the wrong evidence weight silently, with
+                    // the file itself stating the correct checkpoint in a column nobody read. Warn
+                    // when the two disagree; the column wins.
+                    var periodFromColumn = AssessmentNormalization.NormalizePeriod(uploadType, periodRaw, "");
+                    var periodFromFileName = AssessmentNormalization.NormalizePeriod(uploadType, null, fileName);
+                    if (periodFromColumn is not null && periodFromFileName is not null &&
+                        !string.Equals(periodFromColumn, periodFromFileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        logger.LogWarning(
+                            "Period mismatch in {File}: the file's own column says {FromColumn} but the " +
+                            "filename says {FromFileName}. Using {Used} — check the filename is not mislabelled.",
+                            fileName, periodFromColumn, periodFromFileName, periodFromColumn);
+                    }
 
                     var normalizedSubject = AssessmentNormalization.NormalizeSubject(subject);
                     var finalScore = score > 0 ? (double?)score : null;

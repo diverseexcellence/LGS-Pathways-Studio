@@ -181,10 +181,13 @@ public static class AssessmentNormalization
 
     /// <summary>
     /// Parses a source-formatted date string into ISO "yyyy-MM-dd". Handles the mixed formats seen
-    /// across LGS exports: parenthesized IXL dates ("(11/13/2025)"), day-first Acadience dates
-    /// ("22/8/2025"), and ISO/US ILEARN dates. When the day/month order is genuinely ambiguous
-    /// (both leading segments &lt;= 12), <paramref name="ambiguous"/> is set and a per-source
-    /// default (IXL/ILEARN = month-first, Acadience = day-first) is assumed.
+    /// across LGS exports: ISO ("2025-08-19"), parenthesised IXL ("(11/13/2025)"), US
+    /// ("02/25/2026") and 2-digit-year Acadience ("11/18/25").
+    /// When the day/month order is genuinely ambiguous (both leading segments &lt;= 12),
+    /// <paramref name="ambiguous"/> is set and month-first is assumed.
+    /// <para><paramref name="source"/> no longer influences day/month order — every LGS source is
+    /// month-first (see the note in the ambiguous branch). It is retained because callers pass it,
+    /// and because a genuinely day-first feed would need it back.</para>
     /// </summary>
     public static string? TryParseFlexibleDate(string? raw, string? source, out bool ambiguous)
     {
@@ -208,16 +211,21 @@ public static class AssessmentNormalization
                 int.TryParse(parts[2], out var p2))
             {
                 int year = p2 < 100 ? 2000 + p2 : p2;
-                bool dayFirstSource = string.Equals(source, "Acadience", StringComparison.OrdinalIgnoreCase);
 
                 int month, day;
                 if (p0 > 12) { day = p0; month = p1; }        // unambiguous d/m/y
                 else if (p1 > 12) { month = p0; day = p1; }   // unambiguous m/d/y
                 else
                 {
+                    // Month-first for every source. Acadience used to be treated as day-first, but
+                    // the actual exports contradict that: across 1,226 date values in the live
+                    // ILEARN, IXL and Acadience files, 654 prove month-first (a second segment
+                    // above 12) and not one proves day-first. The old special case silently moved
+                    // 95 of 422 rows in alo_reading_pm_data_2025-2026.csv by whole months
+                    // (11/4/25 was stored as 11 April instead of 4 November).
                     ambiguous = true;
-                    if (dayFirstSource) { day = p0; month = p1; }
-                    else { month = p0; day = p1; }
+                    month = p0;
+                    day = p1;
                 }
 
                 try { return new DateTime(year, month, day).ToString("yyyy-MM-dd"); }

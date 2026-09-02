@@ -96,11 +96,16 @@ public class AssessmentNormalizationTests
     }
 
     [Fact]
-    public void TryParseFlexibleDate_AmbiguousAcadienceDefaultsDayFirst()
+    public void TryParseFlexibleDate_AmbiguousAcadienceDefaultsMonthFirst()
     {
+        // This test previously asserted day-first ("2026-06-05"), matching the parser's Acadience
+        // special case. LGS's actual Acadience export disproves it: in
+        // alo_reading_pm_data_2025-2026.csv, 327 of 422 dates prove month-first (10/27/25,
+        // 11/18/25, 12/15/25) and none prove day-first. The special case was silently shifting
+        // the 95 ambiguous rows by whole months, so it was removed and this expectation corrected.
         var result = AssessmentNormalization.TryParseFlexibleDate("5/6/2026", "Acadience", out var ambiguous);
         Assert.True(ambiguous);
-        Assert.Equal("2026-06-05", result); // Acadience defaults day-first
+        Assert.Equal("2026-05-06", result);
     }
 
     [Fact]

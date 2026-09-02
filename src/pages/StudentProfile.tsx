@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, configApi, Student, Assessment, AISummary, AuditEntry, CollaborationNote, TierRuleset } from '../lib/api';
+import { parseFlexibleDate, formatUsDate, formatUsDateTime } from '../lib/dates';
 
 const AUDIT_EVENT_LABELS: Record<string, string> = {
   TierRecommendation: 'Tier Recommendation',
@@ -93,27 +94,6 @@ function normalizeProficiency(p: string) {
   return p;
 }
 
-// Parses date strings from mixed assessment sources into a timestamp.
-// Source formats seen: IXL "(11/13/2025)" (US, month-first), Acadience
-// "22/8/2025" (day-first — 22 can't be a month, so this disambiguates
-// reliably whenever the first segment exceeds 12).
-function parseFlexibleDate(d: string): number {
-  const cleaned = (d || '').trim().replace(/^\(|\)$/g, '');
-  if (!cleaned) return NaN;
-
-  const parts = cleaned.split(/[/\-]/).map(p => p.trim());
-  if (parts.length === 3 && parts.every(p => /^\d+$/.test(p))) {
-    const [a, b, y] = parts.map(Number);
-    const year = y < 100 ? 2000 + y : y;
-    const [month, day] = a > 12 ? [b, a] : [a, b];
-    const ts = new Date(year, month - 1, day).getTime();
-    if (!isNaN(ts)) return ts;
-  }
-
-  const native = new Date(cleaned).getTime();
-  return isNaN(native) ? NaN : native;
-}
-
 // "-1" = Kindergarten — confirmed by LGS (Velvet Wright) on the 2026-08-14 client demo call.
 function normalizeGradeLabel(raw?: string | null): string {
   if (!raw) return '';
@@ -151,11 +131,8 @@ function exclusionText(reason?: string | null): string {
   return `not included in the calculation — ${detail}`;
 }
 
-function formatDate(d: string) {
-  const ts = parseFlexibleDate(d);
-  if (!isNaN(ts)) return new Date(ts).toLocaleDateString();
-  return d || 'N/A';
-}
+// Always US format, never the viewer's locale — see src/lib/dates.ts.
+const formatDate = (d?: string | null) => formatUsDate(d);
 
 const ETHNICITY_MAP: Record<string, string> = {
   '1': 'American Indian or Alaska Native',
@@ -507,7 +484,7 @@ export default function StudentProfile() {
         {/* Demographic grid */}
         <div className="px-6 py-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-4 text-sm">
           {[
-            { label: 'Date of Birth', value: student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A' },
+            { label: 'Date of Birth', value: formatUsDate(student.dob) },
             { label: 'Age', value: String(calculateAge(student.dob)) },
             { label: 'Gender', value: student.gender || 'N/A' },
             { label: 'Ethnicity', value: translateEthnicity(student.ethnicity) },
@@ -529,10 +506,10 @@ export default function StudentProfile() {
             <span>Source: <span className="text-slate-600 font-mono">{student.sourceFile}</span></span>
           )}
           {student.entryDate && (
-            <span>Entry: <span className="text-slate-600">{new Date(student.entryDate).toLocaleDateString()}</span></span>
+            <span>Entry: <span className="text-slate-600">{formatUsDate(student.entryDate)}</span></span>
           )}
           {student.exitDate && (
-            <span>Exit: <span className="text-slate-600">{new Date(student.exitDate).toLocaleDateString()}</span></span>
+            <span>Exit: <span className="text-slate-600">{formatUsDate(student.exitDate)}</span></span>
           )}
           <button
             onClick={() => setShowDemographics(true)}
@@ -698,7 +675,7 @@ export default function StudentProfile() {
                     </div>
                   );
                 })()}
-                <p className="text-xs text-slate-400 mt-3">Generated: {new Date(aiSummary.generatedAt).toLocaleString()}</p>
+                <p className="text-xs text-slate-400 mt-3">Generated: {formatUsDateTime(aiSummary.generatedAt)}</p>
               </div>
             ) : (
               <p className="text-slate-500 text-sm">No AI summary yet. Click Generate to create one (PII-free).</p>
@@ -897,7 +874,7 @@ export default function StudentProfile() {
                   {[
                     ['Full Name', formatDisplayName(student.fullName)],
                     ['STN', student.stn || 'N/A'],
-                    ['Date of Birth', student.dob ? new Date(student.dob).toLocaleDateString() : 'N/A'],
+                    ['Date of Birth', formatUsDate(student.dob)],
                     ['Age', String(calculateAge(student.dob))],
                     ['Gender', student.gender || 'N/A'],
                     ['Ethnicity', translateEthnicity(student.ethnicity)],
@@ -920,9 +897,9 @@ export default function StudentProfile() {
                     ['Grade', normalizeGradeLabel(student.grade) || 'N/A'],
                     ['Class Group', student.classGroup || 'N/A'],
                     ['Homeroom', student.homeRoom || 'N/A'],
-                    ['Entry Date', student.entryDate ? new Date(student.entryDate).toLocaleDateString() : 'N/A'],
-                    ['Exit Date', student.exitDate ? new Date(student.exitDate).toLocaleDateString() : 'N/A'],
-                    ['Enrolled', student.enrolDate ? new Date(student.enrolDate).toLocaleDateString() : 'N/A'],
+                    ['Entry Date', formatUsDate(student.entryDate)],
+                    ['Exit Date', formatUsDate(student.exitDate)],
+                    ['Enrolled', formatUsDate(student.enrolDate)],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span className="block text-xs text-slate-400 font-medium">{label}</span>
