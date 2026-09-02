@@ -44,18 +44,11 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         var allAssessments = await cosmos.GetAllAssessmentsAsync();
         var ruleset = await cosmos.GetTierRulesetConfigAsync();
 
-        // ── Math proficiency % ────────────────────────────────────────────────
-        // Group by studentId, pick latest Math assessment per student, resolve its 0-3 value via
-        // the same normalizer the tier engine uses (no percentile fallback — TR-003).
-        var mathByStudent = allAssessments
-            .Where(a => AssessmentNormalization.NormalizeSubject(a.Subject) == "Math" && a.StudentId != null)
-            .GroupBy(a => a.StudentId)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.DateIso ?? a.Date ?? a.UploadedAt).First());
-
-        int mathTotal = mathByStudent.Count;
-        int mathOnAbove = mathByStudent.Values.Count(a =>
-            PerformanceLevelNormalizer.TryResolve(a.UploadType, a.Proficiency, ruleset, out var v) && v >= 2);
-        double? mathPct = mathTotal > 0 ? Math.Round((double)mathOnAbove / mathTotal * 100, 1) : null;
+        // ── Proficiency % (Math + ELA) ────────────────────────────────────────
+        // Group by studentId, pick latest assessment per student for the subject, resolve its
+        // 0-3 value via the same normalizer the tier engine uses (no percentile fallback — TR-003).
+        var (mathPct, mathTotal, mathOnAbove) = ProficiencyPct(allAssessments, ruleset, "Math");
+        var (elaPct, elaTotal, elaOnAbove) = ProficiencyPct(allAssessments, ruleset, "ELA");
 
         // ── Tier distribution (System Recommended + Finalized subjects — see dashboard gating) ──
         var (allStudents, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
@@ -76,21 +69,42 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             pending = allStudents.Count - mathTiered.Count,
         };
 
-        // ── ELA growth (same instrument only) ────────────────────────────────
+        // ── Growth (same instrument only, Math + ELA) ─────────────────────────
         // IXL diagnostic scores and ILEARN scale scores are different units; subtracting them
-        // is not growth. Require ≥2 scored ELA results from one upload type per student.
-        var (elaGrowth, elaGrowthStudents) = DashboardMetrics.ElaSameInstrumentGrowth(allAssessments);
+        // is not growth. Require ≥2 scored results from one upload type per student.
+        var (elaGrowth, elaGrowthStudents) = DashboardMetrics.SameInstrumentGrowth(allAssessments, "ELA");
+        var (mathGrowth, mathGrowthStudents) = DashboardMetrics.SameInstrumentGrowth(allAssessments, "Math");
 
         return Ok(new
         {
             mathProficiencyPct = mathPct,
             mathStudentsTotal = mathTotal,
             mathStudentsOnAbove = mathOnAbove,
+            elaProficiencyPct = elaPct,
+            elaStudentsTotal = elaTotal,
+            elaStudentsOnAbove = elaOnAbove,
             elaGrowthAvgDelta = elaGrowth,
             elaStudentsWithGrowthData = elaGrowthStudents,
+            mathGrowthAvgDelta = mathGrowth,
+            mathStudentsWithGrowthData = mathGrowthStudents,
             elaTierCounts,
             mathTierCounts,
         });
+    }
+
+    private static (double? Pct, int Total, int OnAbove) ProficiencyPct(
+        List<AssessmentDocument> assessments, TierRulesetConfigDocument ruleset, string subject)
+    {
+        var byStudent = assessments
+            .Where(a => AssessmentNormalization.NormalizeSubject(a.Subject) == subject && a.StudentId != null)
+            .GroupBy(a => a.StudentId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.DateIso ?? a.Date ?? a.UploadedAt).First());
+
+        int total = byStudent.Count;
+        int onAbove = byStudent.Values.Count(a =>
+            PerformanceLevelNormalizer.TryResolve(a.UploadType, a.Proficiency, ruleset, out var v) && v >= 2);
+        double? pct = total > 0 ? Math.Round((double)onAbove / total * 100, 1) : null;
+        return (pct, total, onAbove);
     }
 
     // ─── Academic growth timeline ─────────────────────────────────────────────

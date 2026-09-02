@@ -8,16 +8,16 @@ namespace LgsImpact.Api.Services;
 public static class DashboardMetrics
 {
     /// <summary>
-    /// Average ELA raw-score change (latest minus earliest) for students who have at least two
-    /// scored results from the <b>same</b> instrument. IXL diagnostic scores (~0–800) and ILEARN
-    /// scale scores (~5000) are not comparable — mixing them produced the +5153 "growth" KPI.
-    /// When a student has two+ of both, ILEARN is preferred (state test).
+    /// Average raw-score change (latest minus earliest) for students who have at least two
+    /// scored results from the <b>same</b> instrument, for the given subject. IXL diagnostic
+    /// scores (~0–800) and ILEARN scale scores (~5000) are not comparable — mixing them produced
+    /// the +5153 "growth" KPI. When a student has two+ of both, ILEARN is preferred (state test).
     /// </summary>
-    public static (double? AvgDelta, int StudentCount) ElaSameInstrumentGrowth(
-        IEnumerable<AssessmentDocument> assessments)
+    public static (double? AvgDelta, int StudentCount) SameInstrumentGrowth(
+        IEnumerable<AssessmentDocument> assessments, string subject)
     {
         var scored = assessments.Where(a =>
-            AssessmentNormalization.NormalizeSubject(a.Subject) == "ELA"
+            AssessmentNormalization.NormalizeSubject(a.Subject) == subject
             && !string.IsNullOrWhiteSpace(a.StudentId)
             && a.Score.HasValue
             && !string.IsNullOrWhiteSpace(a.UploadType));
@@ -41,4 +41,7 @@ public static class DashboardMetrics
         if (deltas.Count == 0) return (null, 0);
         return (Math.Round(deltas.Average(), 1), deltas.Count);
     }
+
+    public static (double? AvgDelta, int StudentCount) ElaSameInstrumentGrowth(
+        IEnumerable<AssessmentDocument> assessments) => SameInstrumentGrowth(assessments, "ELA");
 }

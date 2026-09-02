@@ -406,8 +406,13 @@ export interface DashboardKpis {
   mathProficiencyPct: number | null;
   mathStudentsTotal: number;
   mathStudentsOnAbove: number;
+  elaProficiencyPct: number | null;
+  elaStudentsTotal: number;
+  elaStudentsOnAbove: number;
   elaGrowthAvgDelta: number | null;
   elaStudentsWithGrowthData: number;
+  mathGrowthAvgDelta: number | null;
+  mathStudentsWithGrowthData: number;
   elaTierCounts: TierCounts;
   mathTierCounts: TierCounts;
 }

@@ -402,7 +402,7 @@ export default function Dashboard() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         <KpiCard
           icon={<TrendingUp className="w-6 h-6 text-lgs-blue" />}
           iconBg="bg-slate-100"
@@ -414,21 +414,43 @@ export default function Dashboard() {
           tooltip="Average change in raw ELA score (latest minus earliest), only when both scores come from the same assessment. IXL and ILEARN scales are not comparable."
         />
         <KpiCard
+          icon={<TrendingUp className="w-6 h-6 text-lgs-red" />}
+          iconBg="bg-red-50"
+          badge={kpis?.mathGrowthAvgDelta != null ? (kpis.mathGrowthAvgDelta >= 0 ? '↗ IMPROVED' : '↘ DECLINED') : '— NO DATA'}
+          badgeColor={kpis?.mathGrowthAvgDelta != null ? (kpis.mathGrowthAvgDelta >= 0 ? 'text-green-600 bg-green-50' : 'text-lgs-red bg-red-50') : 'text-slate-400 bg-slate-100'}
+          label="Avg. Math Growth"
+          value={kpis == null ? '...' : kpis.mathGrowthAvgDelta != null ? (kpis.mathGrowthAvgDelta >= 0 ? `+${kpis.mathGrowthAvgDelta}` : String(kpis.mathGrowthAvgDelta)) : 'N/A'}
+          sub={kpis == null ? '' : kpis.mathStudentsWithGrowthData > 0 ? `${kpis.mathStudentsWithGrowthData} students with 2+ scores on the same test` : 'Need 2+ IXL or 2+ ILEARN Math scores'}
+          tooltip="Average change in raw Math score (latest minus earliest), only when both scores come from the same assessment. IXL and ILEARN scales are not comparable."
+        />
+        <KpiCard
+          icon={<Users className="w-6 h-6 text-lgs-blue" />}
+          iconBg="bg-slate-100"
+          label="Active Caseload"
+          value={loadingStats ? '...' : String(stats.activeCaseload)}
+          sub={loadingStats ? '' : `${stats.tier3Count} students in Tier 3`}
+          tooltip="Total number of active students in the system. Tier distribution excludes students with Pending tier status. No target threshold has been set for this metric, so no status badge is shown — tell us what caseload or Tier 3 share should count as a concern and we can add one."
+        />
+        <KpiCard
+          icon={<Award className="w-6 h-6 text-lgs-blue" />}
+          iconBg="bg-slate-100"
+          label="ELA Proficiency"
+          value={kpis == null ? '...' : kpis.elaProficiencyPct != null ? `${kpis.elaProficiencyPct}%` : 'N/A'}
+          sub={kpis == null ? '' : kpis.elaStudentsTotal > 0 ? `${kpis.elaStudentsOnAbove} of ${kpis.elaStudentsTotal} students On/Above` : 'No ELA assessment data'}
+          tooltip="Percentage of students with latest ELA assessment at or above grade level (On/Above). Source: ILEARN & IXL."
+        />
+        <KpiCard
           icon={<Award className="w-6 h-6 text-lgs-red" />}
           iconBg="bg-red-50"
-          badge={kpis?.mathProficiencyPct != null ? (kpis.mathProficiencyPct >= 50 ? '↗ IMPROVED' : '↘ ALERT') : '— NO DATA'}
-          badgeColor={kpis?.mathProficiencyPct != null ? (kpis.mathProficiencyPct >= 50 ? 'text-green-600 bg-green-50' : 'text-lgs-red bg-red-50') : 'text-slate-400 bg-slate-100'}
           label="Math Proficiency"
           value={kpis == null ? '...' : kpis.mathProficiencyPct != null ? `${kpis.mathProficiencyPct}%` : 'N/A'}
           sub={kpis == null ? '' : kpis.mathStudentsTotal > 0 ? `${kpis.mathStudentsOnAbove} of ${kpis.mathStudentsTotal} students On/Above` : 'No Math assessment data'}
           tooltip="Percentage of students with latest Math assessment at or above grade level (On/Above). Source: ILEARN & IXL."
         />
-        <KpiCard icon={<Users className="w-6 h-6 text-lgs-blue" />} iconBg="bg-slate-100" badge={stats.totalStudents > 0 && (stats.tier3Count / stats.totalStudents) < 0.3 ? '↗ ON TRACK' : '↘ ALERT'} badgeColor={stats.totalStudents > 0 && (stats.tier3Count / stats.totalStudents) < 0.3 ? 'text-green-600 bg-green-50' : 'text-lgs-red bg-red-50'} label="Active Caseload" value={loadingStats ? '...' : String(stats.activeCaseload)} sub={loadingStats ? '' : `${stats.tier3Count} students in Tier 3`} tooltip="Total number of active students in the system. Tier distribution excludes students with Pending tier status." />
         {/* Target Goal — editable */}
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
           <div className="flex justify-between items-start mb-4">
             <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center"><Target className="w-6 h-6 text-lgs-blue" /></div>
-            <span className="text-xs font-bold flex items-center gap-1 px-2 py-1 rounded-md text-green-600 bg-green-50">↗ IMPROVED</span>
           </div>
           <div className="flex items-center gap-1 mb-1">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Target Goal</h3>
@@ -832,8 +854,8 @@ function GeoMapFitBounds({ data }: { data: { lat: number; lng: number }[] }) {
 function KpiCard({ icon, iconBg, badge, badgeColor, label, value, sub, tooltip }: {
   icon: React.ReactNode;
   iconBg: string;
-  badge: string;
-  badgeColor: string;
+  badge?: string;
+  badgeColor?: string;
   label: string;
   value: string;
   sub: string;
@@ -862,7 +884,7 @@ function KpiCard({ icon, iconBg, badge, badgeColor, label, value, sub, tooltip }
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
       <div className="flex justify-between items-start mb-4">
         <div className={`w-12 h-12 rounded-xl ${iconBg} flex items-center justify-center`}>{icon}</div>
-        <span className={`text-xs font-bold flex items-center gap-1 px-2 py-1 rounded-md ${badgeColor}`}>{badge}</span>
+        {badge && <span className={`text-xs font-bold flex items-center gap-1 px-2 py-1 rounded-md ${badgeColor}`}>{badge}</span>}
       </div>
       <div ref={wrapRef} className="flex items-center gap-1 mb-1 relative">
         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">{label}</h3>
