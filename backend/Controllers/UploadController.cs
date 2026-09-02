@@ -1276,9 +1276,16 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     if (!seenAssessments.TryGetValue(student.StudentId, out var signatures))
                     {
                         var existing = await cosmos.GetAssessmentsAsync(student.StudentId);
-                        signatures = existing.ToDictionary(
-                            a => AssessmentSignature(a.UploadType, a.Subject, a.Period, a.DateIso ?? a.Date),
-                            a => a.Id, StringComparer.Ordinal);
+                        // Grouped rather than ToDictionary: a student who already carries two rows
+                        // sharing one signature — which the pre-dedup imports left behind in
+                        // quantity — made ToDictionary throw "An item with the same key has already
+                        // been added". That threw inside the per-row try, so the row was counted as
+                        // an error and skipped, and every later row for that student failed too.
+                        // Keep the first id; the extra rows are the duplicates being superseded.
+                        signatures = existing
+                            .GroupBy(a => AssessmentSignature(a.UploadType, a.Subject, a.Period, a.DateIso ?? a.Date),
+                                     StringComparer.Ordinal)
+                            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
                         seenAssessments[student.StudentId] = signatures;
                     }
 
