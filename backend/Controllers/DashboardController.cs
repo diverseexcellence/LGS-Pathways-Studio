@@ -161,17 +161,18 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         foreach (var s in students)
         {
             var t = SubjectOf(s, subject);
-            // Per-subject tier is included once the engine has produced a recommendation —
-            // System Recommended or Finalized — not gated to Finalized-only (that would show 0
-            // for every subject until every student is individually finalized).
-            if (t.Status == "Pending") continue;
-
             var grade = NormalizeGrade(s.Grade);
             if (!gradeMap.TryGetValue(grade, out var gs))
             {
                 gs = new GradeStats { Grade = grade };
                 gradeMap[grade] = gs;
             }
+
+            // Per-subject tier is included once the engine has produced a recommendation —
+            // System Recommended or Finalized — not gated to Finalized-only (that would show 0
+            // for every subject until every student is individually finalized). Students still
+            // awaiting a recommendation are tracked as Pending so the grade total covers everyone.
+            if (t.Status == "Pending") { gs.Pending++; continue; }
 
             if (t.Tier == "Tier 1") gs.Tier1++;
             else if (t.Tier == "Tier 2") gs.Tier2++;
@@ -186,7 +187,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
                 tier1 = g.Tier1,
                 tier2 = g.Tier2,
                 tier3 = g.Tier3,
-                total = g.Tier1 + g.Tier2 + g.Tier3,
+                pending = g.Pending,
+                total = g.Tier1 + g.Tier2 + g.Tier3 + g.Pending,
             });
 
         return Ok(result);
@@ -203,7 +205,6 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         {
             if (NormalizeGrade(s.Grade) != grade) continue;
             var t = SubjectOf(s, subject);
-            if (t.Status == "Pending") continue;
 
             var teacher = s.HomeRoom ?? s.ClassGroup ?? "Unassigned";
             if (!teacherMap.TryGetValue(teacher, out var ts))
@@ -213,6 +214,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
             }
 
             ts.Total++;
+            if (t.Status == "Pending") { ts.Pending++; continue; }
+
             if (t.Tier == "Tier 1") ts.Tier1++;
             else if (t.Tier == "Tier 2") ts.Tier2++;
             else if (t.Tier == "Tier 3") ts.Tier3++;
@@ -226,6 +229,7 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
                 tier1 = t.Tier1,
                 tier2 = t.Tier2,
                 tier3 = t.Tier3,
+                pending = t.Pending,
                 total = t.Total,
             });
 
@@ -402,8 +406,8 @@ public class DashboardController(ICosmosDbService cosmos) : ControllerBase
         _ => int.TryParse(grade, out var n) ? n : 99,
     };
 
-    private class GradeStats { public string Grade { get; set; } = ""; public int Tier1, Tier2, Tier3; }
-    private class TeacherStats { public string Teacher { get; set; } = ""; public int Tier1, Tier2, Tier3, Total; }
+    private class GradeStats { public string Grade { get; set; } = ""; public int Tier1, Tier2, Tier3, Pending; }
+    private class TeacherStats { public string Teacher { get; set; } = ""; public int Tier1, Tier2, Tier3, Pending, Total; }
 }
 
 public record SetTargetGoalRequest(int GoalPct);

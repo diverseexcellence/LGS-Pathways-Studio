@@ -34,6 +34,14 @@ function normalizeGradeLabel(raw: string | number): string {
   return cleaned.replace(/^0+(?=\d)/, '');
 }
 
+// Single source of truth for tier colors — reused by the donut, the homeroom caseload chart,
+// and the grade/teacher breakdown table headers so all three stay visually consistent.
+const TIER_COLORS: Record<'Tier 1' | 'Tier 2' | 'Tier 3', string> = {
+  'Tier 1': '#214965',
+  'Tier 2': '#9ca3af',
+  'Tier 3': '#b91c1c',
+};
+
 function buildStats(students: Student[], subject: TierSubject): Stats {
   let t1 = 0, t2 = 0, t3 = 0;
   const gradeMap: Record<string, { proficient: number; developing: number; critical: number }> = {};
@@ -365,9 +373,9 @@ export default function Dashboard() {
   }
 
   const buildDonutData = (s: Stats) => [
-    { name: 'Tier 1', value: s.tier1Pct, count: s.tier1Count, color: '#214965' },
-    { name: 'Tier 2', value: s.tier2Pct, count: s.tier2Count, color: '#9ca3af' },
-    { name: 'Tier 3', value: s.tier3Pct, count: s.tier3Count, color: '#b91c1c' },
+    { name: 'Tier 1', value: s.tier1Pct, count: s.tier1Count, color: TIER_COLORS['Tier 1'] },
+    { name: 'Tier 2', value: s.tier2Pct, count: s.tier2Count, color: TIER_COLORS['Tier 2'] },
+    { name: 'Tier 3', value: s.tier3Pct, count: s.tier3Count, color: TIER_COLORS['Tier 3'] },
   ];
   const elaDonutData = buildDonutData(elaStats);
   const mathDonutData = buildDonutData(mathStats);
@@ -539,10 +547,10 @@ export default function Dashboard() {
                 <YAxis dataKey="grade" type="category" axisLine={false} tickLine={false} tick={{ fill: '#214965', fontSize: 12, fontWeight: 600 }} width={80} />
                 <RechartsTooltip formatter={(v: number, name: string) => [`${v}%`, name]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
                 <Legend iconType="square" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                <Bar dataKey="above" name="Above" stackId="a" fill="#15803d" radius={[4, 0, 0, 4]} />
-                <Bar dataKey="on" name="On Grade" stackId="a" fill="#214965" />
+                <Bar dataKey="below" name="Below" stackId="a" fill="#b91c1c" radius={[4, 0, 0, 4]} />
                 <Bar dataKey="approaching" name="Approaching" stackId="a" fill="#d97706" />
-                <Bar dataKey="below" name="Below" stackId="a" fill="#b91c1c" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="on" name="On Grade" stackId="a" fill="#214965" />
+                <Bar dataKey="above" name="Above" stackId="a" fill="#15803d" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -616,64 +624,78 @@ export default function Dashboard() {
           gradeRows.length === 0 ? (
             <div className="text-slate-400 text-sm py-8 text-center">No tiered students yet.</div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
-                  <th className="pb-3 pr-4">Grade</th>
-                  <th className="pb-3 pr-4 text-lgs-blue">Tier 1</th>
-                  <th className="pb-3 pr-4 text-slate-500">Tier 2</th>
-                  <th className="pb-3 pr-4 text-lgs-red">Tier 3</th>
-                  <th className="pb-3 pr-4">Total</th>
-                  <th className="pb-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {gradeRows.map(row => (
-                  <tr key={row.grade} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToTeachers(row.grade)}>
-                    <td className="py-3 pr-4 font-semibold text-lgs-blue">Grade {row.grade}</td>
-                    <td className="py-3 pr-4">{row.tier1}</td>
-                    <td className="py-3 pr-4">{row.tier2}</td>
-                    <td className="py-3 pr-4">{row.tier3}</td>
-                    <td className="py-3 pr-4">{row.total}</td>
-                    <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
+            <>
+              <p className="text-xs text-slate-400 mb-3 italic">
+                Tier 1/2/3 counts reflect tiered students only. Pending is students awaiting a tier determination, so Total covers every student in the grade.
+              </p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                    <th className="pb-3 pr-4">Grade</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 1'] }}>Tier 1</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 2'] }}>Tier 2</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 3'] }}>Tier 3</th>
+                    <th className="pb-3 pr-4">Pending</th>
+                    <th className="pb-3 pr-4">Total</th>
+                    <th className="pb-3" />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {gradeRows.map(row => (
+                    <tr key={row.grade} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToTeachers(row.grade)}>
+                      <td className="py-3 pr-4 font-semibold text-lgs-blue">Grade {row.grade}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 1'] }}>{row.tier1}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 2'] }}>{row.tier2}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 3'] }}>{row.tier3}</td>
+                      <td className="py-3 pr-4 text-slate-400">{row.pending}</td>
+                      <td className="py-3 pr-4">{row.total}</td>
+                      <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           )
         ) : drillView.level === 'teachers' ? (
           teacherRows.length === 0 ? (
             <div className="text-slate-400 text-sm py-8 text-center">No teachers found for this grade.</div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
-                  <th className="pb-3 pr-4">Teacher / Class</th>
-                  <th className="pb-3 pr-4 text-lgs-blue">Tier 1</th>
-                  <th className="pb-3 pr-4 text-slate-500">Tier 2</th>
-                  <th className="pb-3 pr-4 text-lgs-red">Tier 3</th>
-                  <th className="pb-3 pr-4">Total</th>
-                  <th className="pb-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {teacherRows.map(row => (
-                  <tr key={row.teacher} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToStudents((drillView as any).grade, row.teacher)}>
-                    <td className="py-3 pr-4 font-semibold text-lgs-blue">{row.teacher}</td>
-                    <td className="py-3 pr-4">{row.tier1}</td>
-                    <td className="py-3 pr-4">{row.tier2}</td>
-                    <td className="py-3 pr-4">{row.tier3}</td>
-                    <td className="py-3 pr-4">{row.total}</td>
+            <>
+              <p className="text-xs text-slate-400 mb-3 italic">
+                Tier 1/2/3 counts reflect tiered students only. Pending is students awaiting a tier determination, so Total covers every student in the class.
+              </p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
+                    <th className="pb-3 pr-4">Teacher / Class</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 1'] }}>Tier 1</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 2'] }}>Tier 2</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 3'] }}>Tier 3</th>
+                    <th className="pb-3 pr-4">Pending</th>
+                    <th className="pb-3 pr-4">Total</th>
+                    <th className="pb-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {teacherRows.map(row => (
+                    <tr key={row.teacher} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToStudents((drillView as any).grade, row.teacher)}>
+                      <td className="py-3 pr-4 font-semibold text-lgs-blue">{row.teacher}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 1'] }}>{row.tier1}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 2'] }}>{row.tier2}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 3'] }}>{row.tier3}</td>
+                      <td className="py-3 pr-4 text-slate-400">{row.pending}</td>
+                      <td className="py-3 pr-4">{row.total}</td>
+                      <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
+                    </tr>
+                  ))}
+                  <tr className="hover:bg-slate-100 transition-colors cursor-pointer text-slate-400" onClick={() => drillToStudents((drillView as any).grade)}>
+                    <td className="py-3 pr-4 italic">View all students in grade</td>
+                    <td colSpan={5} />
                     <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
                   </tr>
-                ))}
-                <tr className="hover:bg-slate-100 transition-colors cursor-pointer text-slate-400" onClick={() => drillToStudents((drillView as any).grade)}>
-                  <td className="py-3 pr-4 italic">View all students in grade</td>
-                  <td colSpan={4} />
-                  <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
-                </tr>
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            </>
           )
         ) : (
           drillStudents.length === 0 ? (
@@ -722,15 +744,15 @@ export default function Dashboard() {
             </div>
             <div className="h-[400px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.homeRoomData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="initials" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} interval={0} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                <BarChart data={stats.homeRoomData} layout="vertical" margin={{ top: 10, right: 30, left: 10, bottom: 10 }} barSize={16}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                  <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
+                  <YAxis dataKey="initials" type="category" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} width={40} interval={0} />
                   <RechartsTooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} cursor={{ fill: '#f1f5f9' }} />
                   <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                  <Bar dataKey="Tier 1" stackId="a" fill="#214965" />
-                  <Bar dataKey="Tier 2" stackId="a" fill="#9ca3af" />
-                  <Bar dataKey="Tier 3" stackId="a" fill="#b91c1c" />
+                  <Bar dataKey="Tier 1" stackId="a" fill={TIER_COLORS['Tier 1']} />
+                  <Bar dataKey="Tier 2" stackId="a" fill={TIER_COLORS['Tier 2']} />
+                  <Bar dataKey="Tier 3" stackId="a" fill={TIER_COLORS['Tier 3']} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -817,19 +839,50 @@ function KpiCard({ icon, iconBg, badge, badgeColor, label, value, sub, tooltip }
   sub: string;
   tooltip: string;
 }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Hover works for mouse users; tap-to-toggle (with an outside-click/tap to dismiss) covers
+  // touch devices like iPad, which have no :hover state and never triggered the old
+  // group-hover-only tooltip.
+  useEffect(() => {
+    if (!showTooltip) return;
+    function handleOutside(e: MouseEvent | TouchEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setShowTooltip(false);
+    }
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [showTooltip]);
+
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
       <div className="flex justify-between items-start mb-4">
         <div className={`w-12 h-12 rounded-xl ${iconBg} flex items-center justify-center`}>{icon}</div>
         <span className={`text-xs font-bold flex items-center gap-1 px-2 py-1 rounded-md ${badgeColor}`}>{badge}</span>
       </div>
-      <div className="flex items-center gap-1 mb-1 relative group">
+      <div ref={wrapRef} className="flex items-center gap-1 mb-1 relative">
         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">{label}</h3>
-        <Info className="w-3.5 h-3.5 text-slate-400 cursor-help" />
-        <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 pointer-events-none normal-case tracking-normal">
-          {tooltip}
-          <div className="absolute top-full left-4 border-4 border-transparent border-t-slate-800" />
-        </div>
+        <button
+          type="button"
+          onClick={() => setShowTooltip(v => !v)}
+          onMouseEnter={() => setShowTooltip(true)}
+          onMouseLeave={() => setShowTooltip(false)}
+          aria-label={`About ${label}`}
+          aria-expanded={showTooltip}
+          className="text-slate-400 hover:text-slate-600"
+        >
+          <Info className="w-3.5 h-3.5 cursor-help" />
+        </button>
+        {showTooltip && (
+          <div className="absolute bottom-full left-0 mb-2 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 normal-case tracking-normal">
+            {tooltip}
+            <div className="absolute top-full left-4 border-4 border-transparent border-t-slate-800" />
+          </div>
+        )}
       </div>
       <div className="text-3xl font-black text-lgs-blue mb-1">{value}</div>
       <p className="text-xs text-slate-500 font-medium">{sub}</p>

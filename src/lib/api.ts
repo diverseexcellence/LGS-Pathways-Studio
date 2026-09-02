@@ -387,9 +387,9 @@ export const notesApi = {
 
 export type TierSubject = 'ela' | 'math';
 
-export interface GradeRow { grade: string; tier1: number; tier2: number; tier3: number; total: number }
+export interface GradeRow { grade: string; tier1: number; tier2: number; tier3: number; pending: number; total: number }
 export interface GradeProficiencyRow { grade: string; above: number; on: number; approaching: number; below: number; totalStudents: number }
-export interface TeacherRow { teacher: string; tier1: number; tier2: number; tier3: number; total: number }
+export interface TeacherRow { teacher: string; tier1: number; tier2: number; tier3: number; pending: number; total: number }
 export interface DrillStudent {
   studentId: string;
   fullName: string;
