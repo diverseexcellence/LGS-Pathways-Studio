@@ -128,6 +128,24 @@ function statusLabel(status?: string | null): string {
   return isAdminOverride(status) ? 'Admin Override' : (status ?? '');
 }
 
+// Why an assessment was left out of the weighted score. The engine stores machine tokens; these
+// are the plain-English equivalents shown to staff, who need to know whether the omission is
+// expected (a superseded duplicate) or a data problem they can fix (an unidentified period).
+const EXCLUSION_LABELS: Record<string, string> = {
+  unknown_period: 'the assessment period could not be identified, so it cannot be weighted',
+  superseded: 'replaced by a more recent result for the same period',
+  source_excluded: 'this source is not part of the weighted calculation',
+  unrecognized_category: 'the proficiency level was not recognised',
+  unknown_subject: 'the subject could not be identified as ELA or Math',
+};
+
+function exclusionText(reason?: string | null): string {
+  const detail = reason
+    ? EXCLUSION_LABELS[reason] ?? reason.replace(/_/g, ' ')
+    : 'reason not recorded';
+  return `not included in the calculation — ${detail}`;
+}
+
 function formatDate(d: string) {
   const ts = parseFlexibleDate(d);
   if (!isNaN(ts)) return new Date(ts).toLocaleDateString();
@@ -555,7 +573,20 @@ export default function StudentProfile() {
                           <td className="px-4 py-3">{d.formattedDate}</td>
                           <td className="px-4 py-3">{d.type}</td>
                           <td className="px-4 py-3">{d.subject}</td>
-                          <td className="px-4 py-3">{d.period}</td>
+                          {/* No period means the engine can't assign an evidence weight, so the
+                              row is excluded from the tier score entirely. Say so here rather than
+                              leaving a blank cell that reads as merely cosmetic. */}
+                          <td className="px-4 py-3">
+                            {d.period ? d.period : (
+                              <span
+                                title="This assessment's period (checkpoint or benchmark window) could not be identified, so it carries no evidence weight and is not included in the tier calculation."
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs font-medium whitespace-nowrap"
+                              >
+                                <AlertTriangle className="w-3 h-3 shrink-0" />
+                                No period — not counted
+                              </span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 font-medium">{d.score}</td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -721,9 +752,17 @@ export default function StudentProfile() {
                     {t.evidence.length > 0 && (
                       <ul className="mt-1.5 space-y-0.5">
                         {t.evidence.map(ev => (
-                          <li key={ev.assessmentId} className={`text-xs ${ev.counted ? 'text-slate-600' : 'text-slate-400 line-through'}`}>
-                            {ev.source} {ev.period ?? '—'} "{ev.category ?? 'n/a'}"
-                            {ev.counted ? ` (${ev.value}×${ev.weight})` : ` (excluded: ${ev.exclusionReason})`}
+                          <li key={ev.assessmentId} className="text-xs">
+                            {/* Only the assessment itself is struck through — the reason it was left
+                                out has to stay readable, which it isn't under a line-through. */}
+                            <span className={ev.counted ? 'text-slate-600' : 'text-slate-400 line-through'}>
+                              {ev.source} {ev.period ?? 'period not identified'} "{ev.category ?? 'n/a'}"
+                            </span>
+                            {ev.counted ? (
+                              <span className="text-slate-600"> ({ev.value}×{ev.weight})</span>
+                            ) : (
+                              <span className="text-amber-700"> — {exclusionText(ev.exclusionReason)}</span>
+                            )}
                           </li>
                         ))}
                       </ul>
@@ -966,7 +1005,7 @@ export default function StudentProfile() {
                   ['Subject', normalizeSubject(selectedAssessment.subject ?? '')],
                   ['Score', selectedAssessment.score ?? 'N/A'],
                   ['Proficiency', normalizeProficiency(selectedAssessment.proficiency ?? 'N/A')],
-                  ['Period', selectedAssessment.period ?? 'N/A'],
+                  ['Period', selectedAssessment.period ?? 'Not identified — not counted'],
                   ['Date', formatDate(selectedAssessment.date ?? '')],
                 ].map(([label, value]) => (
                   <div key={String(label)}>
