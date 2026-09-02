@@ -47,7 +47,12 @@ function getAssessmentDisplayData(a: Assessment) {
   // locale-formatted text — different sources (Acadience "22/8/2025" vs IXL
   // "(11/13/2025)") don't share a display format, so string/native-Date sort
   // on formattedDate silently breaks. See QA issue #9.
-  const dateValue = parseFlexibleDate(a.date ?? '');
+  //
+  // Prefer the backend's normalized dateIso: it was parsed with per-source knowledge
+  // (Acadience is day-first, ILEARN/IXL month-first), which the local parser below has no
+  // way to know. Falling back to it only when dateIso is absent keeps older records sortable.
+  const isoValue = a.dateIso ? new Date(`${a.dateIso}T00:00:00`).getTime() : NaN;
+  const dateValue = isNaN(isoValue) ? parseFlexibleDate(a.date ?? '') : isoValue;
 
   return {
     type: a.uploadType || 'Assessment',
@@ -221,7 +226,11 @@ export default function StudentProfile() {
   const [showDemographics, setShowDemographics] = useState(false);
   const [selectedAssessment, setSelectedAssessment] = useState<Assessment | null>(null);
 
-  const [assessmentSortConfig, setAssessmentSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  // Newest assessment first by default (BRD: "Sorting by Date descending shows the most recent
+  // assessment at the top"). Without this the table renders in whatever order the API returned.
+  const [assessmentSortConfig, setAssessmentSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(
+    { key: 'formattedDate', direction: 'desc' }
+  );
 
   // G1 – Audit Trail
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
