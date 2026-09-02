@@ -78,7 +78,7 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         return Ok(student);
     }
 
-    // BRD ST-17 (per-subject): admin override / finalize of a single subject's tier. There is no
+    // BRD ST-17 (per-subject): admin override of a single subject's tier. There is no
     // combined overall tier to set (TR-011, AC-08) — ELA and Math are overridden independently.
     [HttpPut("{id}/tier/{subject}")]
     public async Task<IActionResult> SetSubjectTier(string id, string subject, [FromBody] SetSubjectTierDto dto)
@@ -94,14 +94,19 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
 
         if (dto.Tier is not null && dto.Tier is not ("Tier 1" or "Tier 2" or "Tier 3"))
             return BadRequest(new { message = "tier must be 'Tier 1', 'Tier 2', or 'Tier 3'." });
-        if (dto.Status is not null && dto.Status is not ("Pending" or "System Recommended" or "Finalized"))
-            return BadRequest(new { message = "status must be 'Pending', 'System Recommended', or 'Finalized'." });
+        // "Finalized" is still accepted so an older client can't be rejected mid-rollout; it is
+        // normalized to the current name before being stored.
+        if (dto.Status is not null &&
+            dto.Status is not (TierStatus.Pending or TierStatus.SystemRecommended
+                               or TierStatus.AdminOverride or TierStatus.LegacyFinalized))
+            return BadRequest(new { message = "status must be 'Pending', 'System Recommended', or 'Admin Override'." });
 
         var priorTier = target.Tier;
         var priorStatus = target.Status;
 
         if (dto.Tier is not null) target.Tier = dto.Tier;
-        if (dto.Status is not null) target.Status = dto.Status;
+        if (dto.Status is not null)
+            target.Status = TierStatus.IsAdminOverride(dto.Status) ? TierStatus.AdminOverride : dto.Status;
         target.OverriddenBy = CurrentAdminEmail;
         target.OverriddenAt = DateTime.UtcNow.ToString("o");
         student.LastUpdated = DateTime.UtcNow.ToString("o");
@@ -110,7 +115,7 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
 
         await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
             AuditEventType.TierRecommendation, entityType: "Student", entityId: id,
-            details: $"{subjectLabel} Tier Overridden / Finalized by Admin — {student.FullName}: " +
+            details: $"{subjectLabel} Tier Overridden by Admin — {student.FullName}: " +
                      $"Prior: {priorTier ?? "Pending"} ({priorStatus}) → New: {target.Tier ?? "Pending"} ({target.Status})" +
                      (dto.Note is not null ? $" | Note: {dto.Note}" : ""),
             ip: HttpContext.Connection.RemoteIpAddress?.ToString());
@@ -136,16 +141,16 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         return NoContent();
     }
     // BRD ST-16 / Generate Recommendation button: recalculate tier for a single student.
-    // Per-subject Finalized gating: a subject already Finalized is left untouched by the engine,
-    // so this only 400s when BOTH subjects are Finalized (nothing left to compute).
+    // Per-subject override gating: a subject an admin has overridden is left untouched by the
+    // engine, so this only 400s when BOTH subjects are overridden (nothing left to compute).
     [HttpPost("{id}/recalculate-tier")]
     public async Task<IActionResult> RecalculateTier(string id)
     {
         var student = await cosmos.GetStudentAsync(id);
         if (student is null || !student.IsActive) return NotFound();
 
-        if (student.AllSubjectsFinalized)
-            return BadRequest(new { message = "Both ELA and Math tiers are Finalized. Use Override to change them." });
+        if (student.AllSubjectsOverridden)
+            return BadRequest(new { message = "Both ELA and Math tiers are set by Admin Override. Change them from the tier selector instead." });
 
         // ComputeAndApplyAsync writes its own audit entry covering both subjects.
         await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);

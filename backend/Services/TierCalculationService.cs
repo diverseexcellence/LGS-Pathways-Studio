@@ -7,7 +7,7 @@ public interface ITierCalculationService
     /// <summary>
     /// Computes ELA and Math tier recommendations independently for the student based on their
     /// current assessments, updates the StudentDocument in Cosmos, and writes an audit entry when
-    /// something actually changed. A subject whose status is already "Finalized" is never touched.
+    /// something actually changed. A subject whose status is "Admin Override" is never touched.
     /// </summary>
     Task ComputeAndApplyAsync(StudentDocument student, int systemAdminId = 0, string systemAdminEmail = "system");
 
@@ -86,10 +86,10 @@ public class TierCalculationService(
         return true;
     }
 
-    // A subject that is already Finalized is never overwritten by the system.
+    // A subject an administrator has overridden is never overwritten by the system.
     private static bool ApplySubject(SubjectTier target, SubjectTierComputation result, string rulesetVersion, string now)
     {
-        if (target.Status == "Finalized") return false;
+        if (TierStatus.IsAdminOverride(target.Status)) return false;
 
         var changed = target.Tier != result.Tier
             || target.Status != result.Status
@@ -288,7 +288,21 @@ public static class TierStatus
 {
     public const string Pending = "Pending";
     public const string SystemRecommended = "System Recommended";
-    public const string Finalized = "Finalized";
+
+    /// <summary>An administrator has set this subject's tier by hand. The engine never overwrites it.</summary>
+    public const string AdminOverride = "Admin Override";
+
+    /// <summary>Previous name for <see cref="AdminOverride"/>. Documents written before the rename
+    /// still carry this value, so every read path must accept it — see <see cref="IsAdminOverride"/>.
+    /// Never write this value.</summary>
+    public const string LegacyFinalized = "Finalized";
+
+    /// <summary>True when a subject's tier was set by a person and must not be recalculated.
+    /// Accepts the legacy "Finalized" value so pre-rename overrides stay protected without a
+    /// data migration — dropping it would let the engine silently overwrite real admin decisions.</summary>
+    public static bool IsAdminOverride(string? status) =>
+        string.Equals(status, AdminOverride, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, LegacyFinalized, StringComparison.OrdinalIgnoreCase);
 }
 
 public static class TierPendingReason

@@ -117,6 +117,17 @@ function normalizeGradeLabel(raw?: string | null): string {
   return cleaned.replace(/^0+(?=\d)/, '');
 }
 
+// A tier set by a person. Accepts the legacy "Finalized" value that pre-rename student documents
+// still carry, so an existing override keeps displaying (and keeps blocking recalculation).
+function isAdminOverride(status?: string | null): boolean {
+  return status === 'Admin Override' || status === 'Finalized';
+}
+
+// Legacy "Finalized" documents display under the current name.
+function statusLabel(status?: string | null): string {
+  return isAdminOverride(status) ? 'Admin Override' : (status ?? '');
+}
+
 function formatDate(d: string) {
   const ts = parseFlexibleDate(d);
   if (!isNaN(ts)) return new Date(ts).toLocaleDateString();
@@ -284,7 +295,7 @@ export default function StudentProfile() {
     if (!value || !student) return;
     setIsSavingTier(subject);
     try {
-      const updated = await studentsApi.setSubjectTier(studentId, subject, { tier: value, status: 'Finalized' });
+      const updated = await studentsApi.setSubjectTier(studentId, subject, { tier: value, status: 'Admin Override' });
       setStudent(updated);
       if (subject === 'ela') setOverrideTierEla(''); else setOverrideTierMath('');
     } catch (e: any) {
@@ -452,7 +463,7 @@ export default function StudentProfile() {
                 </span>
                 {t?.status && t.status !== 'Pending' && (
                   <p className="text-xs text-slate-400 mt-1">
-                    {t.status}{t.score != null ? ` · score ${t.score.toFixed(2)} (${t.dataPoints} pt${t.dataPoints === 1 ? '' : 's'})` : ''}
+                    {statusLabel(t.status)}{t.score != null ? ` · score ${t.score.toFixed(2)} · from ${t.dataPoints} assessment${t.dataPoints === 1 ? '' : 's'}` : ''}
                   </p>
                 )}
                 {t?.status === 'Pending' && (
@@ -661,14 +672,14 @@ export default function StudentProfile() {
             <h2 className="text-lg font-semibold text-lgs-blue mb-4">Tier Management</h2>
 
             {/* BRD ST-16: one Generate Recommendation button recomputes both subjects at once —
-                the engine skips whichever subject is already Finalized. Override/Finalize is
+                the engine skips whichever subject an admin has overridden. Override is
                 per-subject below since ELA and Math are independent (TR-011). */}
             <div className="mb-4">
               <button
                 onClick={handleGenerateRecommendation}
-                disabled={isGeneratingRec || (student?.elaTier.status === 'Finalized' && student?.mathTier.status === 'Finalized')}
+                disabled={isGeneratingRec || (isAdminOverride(student?.elaTier.status) && isAdminOverride(student?.mathTier.status))}
                 className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
-                title={student?.elaTier.status === 'Finalized' && student?.mathTier.status === 'Finalized' ? 'Both tiers are Finalized — use Override to change' : 'Run the tier recommendation engine for this student'}
+                title={isAdminOverride(student?.elaTier.status) && isAdminOverride(student?.mathTier.status) ? 'Both tiers are set by Admin Override — change them with the selectors below' : 'Run the tier recommendation engine for this student'}
               >
                 <Sparkles className="w-4 h-4" />
                 {isGeneratingRec ? 'Calculating…' : 'Generate Recommendation'}
@@ -681,8 +692,8 @@ export default function StudentProfile() {
             ]).map(([subject, label, t, value, setValue]) => (
               <div key={subject} className="border-t border-slate-100 pt-4 mt-4 first:mt-0 first:border-t-0 first:pt-0">
                 <label className="block text-sm font-medium text-slate-700 mb-2">
-                  {label} — Override / Finalize
-                  {t?.status === 'Finalized' && <span className="ml-2 text-xs font-normal text-slate-400">(Finalized — Generate Recommendation won't overwrite this)</span>}
+                  {label} — Admin Override
+                  {isAdminOverride(t?.status) && <span className="ml-2 text-xs font-normal text-slate-400">(set by an administrator — Generate Recommendation won't overwrite this)</span>}
                 </label>
                 <div className="flex gap-2">
                   <select

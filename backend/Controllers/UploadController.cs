@@ -95,7 +95,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             try
             {
                 var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
-                var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsFinalized).ToList());
+                var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsOverridden).ToList());
                 logger.LogInformation("Post-upload tier recalculation updated {Count} of {Total} students", updated, students.Count);
             }
             catch (Exception ex)
@@ -256,7 +256,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         try
         {
             var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
-            var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsFinalized).ToList());
+            var updated = await tierCalculation.ComputeAndApplyBatchAsync(students.Where(s => !s.AllSubjectsOverridden).ToList());
             logger.LogInformation("Landing-zone tier recalculation updated {Count} of {Total} students", updated, students.Count);
         }
         catch (Exception ex)
@@ -336,7 +336,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     public async Task<IActionResult> RecalculateTiers()
     {
         var (students, _) = await cosmos.ListStudentsAsync(1, 10_000, null, null, activeOnly: true);
-        var eligible = students.Where(s => !s.AllSubjectsFinalized).ToList();
+        var eligible = students.Where(s => !s.AllSubjectsOverridden).ToList();
         var updated = await tierCalculation.ComputeAndApplyBatchAsync(eligible);
         return Ok(new { message = "Tier recalculation complete.", processed = eligible.Count, updated });
     }

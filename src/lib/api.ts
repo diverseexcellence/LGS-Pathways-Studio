@@ -71,7 +71,7 @@ export interface TierEvidence {
 
 export interface SubjectTier {
   tier: string | null;
-  status: string; // "Pending" | "System Recommended" | "Finalized"
+  status: string; // "Pending" | "System Recommended" | "Admin Override" (legacy docs: "Finalized")
   score: number | null;
   dataPoints: number;
   pendingReason: string | null;

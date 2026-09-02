@@ -1,3 +1,4 @@
+using LgsImpact.Api.Services;
 using Newtonsoft.Json;
 
 namespace LgsImpact.Api.Models;
@@ -52,10 +53,12 @@ public class StudentDocument
     public SubjectTier MathTier { get; set; } = new();
 
     [JsonIgnore]
-    public bool AllSubjectsFinalized => ElaTier.Status == "Finalized" && MathTier.Status == "Finalized";
+    public bool AllSubjectsOverridden =>
+        TierStatus.IsAdminOverride(ElaTier.Status) && TierStatus.IsAdminOverride(MathTier.Status);
 
     [JsonIgnore]
-    public bool AnySubjectFinalized => ElaTier.Status == "Finalized" || MathTier.Status == "Finalized";
+    public bool AnySubjectOverridden =>
+        TierStatus.IsAdminOverride(ElaTier.Status) || TierStatus.IsAdminOverride(MathTier.Status);
 
     [JsonProperty("isActive")]
     public bool IsActive { get; set; } = true;
@@ -144,7 +147,9 @@ public class SubjectTier
     [JsonProperty("tier")]
     public string? Tier { get; set; }
 
-    /// <summary>Workflow state: "Pending" | "System Recommended" | "Finalized".</summary>
+    /// <summary>Workflow state: "Pending" | "System Recommended" | "Admin Override".
+    /// Documents written before the rename may still hold the legacy "Finalized" value —
+    /// compare with <see cref="TierStatus.IsAdminOverride"/>, never with a string literal.</summary>
     [JsonProperty("status")]
     public string Status { get; set; } = "Pending";
 

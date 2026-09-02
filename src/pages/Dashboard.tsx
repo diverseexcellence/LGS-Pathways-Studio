@@ -483,7 +483,7 @@ export default function Dashboard() {
             {/* Two subject tiers are calculated independently (TR-011) — shown side by side so
                 ELA and Math distributions can be compared at a glance, which is the primary
                 reason a per-subject tier was requested. Includes System Recommended tiers. */}
-            <p className="text-sm text-slate-500 mt-1">ELA vs. Math tier distribution across recommended and finalized students.</p>
+            <p className="text-sm text-slate-500 mt-1">ELA vs. Math tier distribution across system-recommended and admin-overridden students.</p>
           </div>
           <div className="flex-1 grid grid-cols-2 gap-2 min-h-[180px]">
             {([['ELA', elaDonutData], ['Math', mathDonutData]] as const).map(([label, data]) => (
@@ -568,7 +568,7 @@ export default function Dashboard() {
               {/* Math and ELA tiers are calculated and finalized independently (TR-011) — this
                   section, the homeroom bar, and the ZIP map all reflect whichever subject is
                   selected below. Includes System Recommended tiers, not just Finalized ones. */}
-              <p className="text-xs text-slate-400 -mt-0.5 mb-1">{tierSubject === 'math' ? 'Math' : 'ELA'} tier — system-recommended or finalized</p>
+              <p className="text-xs text-slate-400 -mt-0.5 mb-1">{tierSubject === 'math' ? 'Math' : 'ELA'} tier — system-recommended or admin-overridden</p>
             {/* Breadcrumb */}
             <p className="text-sm text-slate-500 flex items-center gap-1 mt-0.5">
               <span
