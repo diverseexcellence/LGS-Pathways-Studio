@@ -143,7 +143,7 @@ public class TierCalculationService(
             if (ruleset.ExcludedSources.Contains(source, StringComparer.OrdinalIgnoreCase))
             {
                 rec.Counted = false;
-                rec.ExclusionReason = "source_excluded";
+                rec.ExclusionReason = TierExclusionReason.SourceExcluded;
                 evidence.Add(rec);
                 continue;
             }
@@ -151,7 +151,7 @@ public class TierCalculationService(
             if (!PerformanceLevelNormalizer.TryResolve(source, a.Proficiency, ruleset, out var value))
             {
                 rec.Counted = false;
-                rec.ExclusionReason = "unrecognized_category";
+                rec.ExclusionReason = TierExclusionReason.UnrecognizedCategory;
                 evidence.Add(rec);
                 continue;
             }
@@ -171,7 +171,7 @@ public class TierCalculationService(
             if (weight is null)
             {
                 rec.Counted = false;
-                rec.ExclusionReason = "unknown_period";
+                rec.ExclusionReason = TierExclusionReason.UnknownPeriod;
                 evidence.Add(rec);
                 continue;
             }
@@ -205,7 +205,7 @@ public class TierCalculationService(
             foreach (var loser in group.Skip(1))
             {
                 loser.Record.Counted = false;
-                loser.Record.ExclusionReason = "superseded";
+                loser.Record.ExclusionReason = TierExclusionReason.Superseded;
                 evidence.Add(loser.Record);
             }
         }
@@ -249,13 +249,41 @@ public class TierCalculationService(
             fullReasoning.Trim(), null, weightedSum, weightSum, allEvidence);
     }
 
+    /// <summary>Plain-English form of each exclusion reason. Staff reading a tier need to tell an
+    /// expected omission (a superseded duplicate) from a data problem they can fix (a period that
+    /// could not be identified), which the raw token names do not convey.</summary>
+    private static readonly Dictionary<string, string> ExclusionExplanations = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [TierExclusionReason.UnknownPeriod]        = "the assessment period could not be identified, so no evidence weight could be applied",
+        [TierExclusionReason.Superseded]           = "replaced by a more recent result for the same period",
+        [TierExclusionReason.SourceExcluded]       = "the source is not part of the weighted calculation",
+        [TierExclusionReason.UnrecognizedCategory] = "the proficiency level was not recognised",
+        [TierExclusionReason.UnknownSubject]       = "the subject could not be identified as ELA or Math",
+    };
+
+    // Grouped by reason rather than listed row by row: a student carrying a dozen duplicate
+    // checkpoints would otherwise bury the one record that was dropped for a fixable reason.
     private static string BuildExclusionClause(List<TierEvidenceRecord> excluded)
     {
         if (excluded.Count == 0) return "";
-        var items = excluded.Take(5)
-            .Select(e => $"{e.Source} {e.Date ?? "n/a"} \"{e.Category ?? "n/a"}\" ({e.ExclusionReason})");
-        var extra = excluded.Count > 5 ? $" (+{excluded.Count - 5} more)" : "";
-        return $"Excluded: {string.Join("; ", items)}{extra}.";
+
+        var groups = excluded
+            .GroupBy(e => e.ExclusionReason ?? "unspecified")
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g =>
+            {
+                var reason = ExclusionExplanations.TryGetValue(g.Key, out var text)
+                    ? text
+                    : g.Key.Replace('_', ' ');
+                var where = string.Join(", ", g
+                    .Select(e => $"{e.Source} {(string.IsNullOrWhiteSpace(e.Period) ? "no period" : e.Period)}")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(4));
+                return $"{g.Count()} × {reason} ({where})";
+            });
+
+        return $"Not included in the calculation — {excluded.Count} record(s): {string.Join("; ", groups)}.";
     }
 
     private static DateTime TryParseIso(string? iso) =>
@@ -303,6 +331,28 @@ public static class TierStatus
     public static bool IsAdminOverride(string? status) =>
         string.Equals(status, AdminOverride, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, LegacyFinalized, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Why a single assessment was left out of a subject's weighted score. Surfaced to staff
+/// on the student profile, so each value has a plain-English explanation in
+/// <c>TierCalculationService.ExclusionExplanations</c>.</summary>
+public static class TierExclusionReason
+{
+    /// <summary>The source is not part of the weighted calculation at all (AC-09: IREAD).</summary>
+    public const string SourceExcluded = "source_excluded";
+
+    /// <summary>The proficiency/performance label could not be mapped to a 0-3 value.</summary>
+    public const string UnrecognizedCategory = "unrecognized_category";
+
+    /// <summary>No checkpoint or benchmark window could be resolved, so no evidence weight
+    /// applies. Usually a fixable data problem rather than an expected omission.</summary>
+    public const string UnknownPeriod = "unknown_period";
+
+    /// <summary>The record could not be classified as ELA or Math.</summary>
+    public const string UnknownSubject = "unknown_subject";
+
+    /// <summary>A later record exists for the same source, subject and period (spec C-06).</summary>
+    public const string Superseded = "superseded";
 }
 
 public static class TierPendingReason
