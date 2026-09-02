@@ -1229,10 +1229,14 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                     // when it was probed first, the period could only be recovered from the
                     // filename, so an export named ..._150626 PM.csv lost its period entirely and
                     // had to be renamed by hand before upload.
+                    // "School Year" is deliberately absent: it is not a period. Acadience progress-
+                    // monitoring exports carry "School Year" = "2025-2026" and no benchmark window,
+                    // so probing it stored period="2025-2026" on every row — which the Acadience "*"
+                    // wildcard weight would then happily accept as real evidence.
                     var periodRaw = GetVal(row, "Period", "Term", "Benchmark Period",
                                         "Test Reason", "Test Name",
                                         "Test OppNumber", "Assessment Window", "Test Window", "Checkpoint",
-                                        "Diagnostic Window", "Snapshot", "School Year");
+                                        "Diagnostic Window", "Snapshot");
                     var date = GetVal(row, "Date", "Date Taken", "Date of completion",
                                       "Test Date", "Reading Composite Date");
 
