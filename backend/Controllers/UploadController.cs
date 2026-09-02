@@ -290,7 +290,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
                n.Contains("CP2", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string DetectUploadType(string fileName)
+    internal static string DetectUploadType(string fileName)
     {
         var n = fileName.ToUpperInvariant();
         if (n.StartsWith("TEST_")) return "__SKIP__";
@@ -722,6 +722,223 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
             ip: HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return NoContent();
+    }
+
+    // ── One-shot corrective re-import ────────────────────────────────────────────────
+    // Replaces every stored record for one file, in the only order that is safe: the replacement
+    // file is fetched, parsed and validated BEFORE anything is deleted, so a missing or unparseable
+    // source aborts with the existing data untouched. Written because doing this by hand has two
+    // traps. First, a plain re-upload cannot correct a changed date or period: the assessment
+    // signature includes them, so corrected rows are stored alongside the wrong ones and then
+    // compete in latest-wins dedup. Second, the historical duplicate-import bug left several upload
+    // log rows sharing one filename — deleting one wipes every assessment for that name while the
+    // remaining rows keep their content hashes, which then block the re-upload and leave the data
+    // gone with no way back. This clears all of them together.
+    [HttpPost("reimport-file")]
+    public async Task<IActionResult> ReimportFile(
+        [FromBody] ReimportFileRequestDto dto,
+        [FromQuery] bool dryRun = true,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(dto.FileName))
+            return BadRequest(new { message = "fileName is required — the name recorded on the assessments to be replaced." });
+
+        var storedName = dto.FileName.Trim();
+        // The blob may be named differently from the stored records: the ADA-ZEL export is recorded
+        // under a hand-renamed "..._Checkpoint3.csv" while the container holds "..._150626 PM.csv".
+        var sourceName = string.IsNullOrWhiteSpace(dto.SourceFile) ? storedName : dto.SourceFile.Trim();
+
+        var allLogs = await cosmos.GetUploadLogsAsync();
+        var matchingLogs = allLogs
+            .Where(l => !string.IsNullOrWhiteSpace(l.FileName) &&
+                        (l.FileName.Trim().Equals(storedName, StringComparison.OrdinalIgnoreCase) ||
+                         l.FileName.Trim().Equals(sourceName, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        // Delete by every exact spelling that exists, since the Cosmos query matches FileName
+        // case-sensitively and records may predate a rename.
+        var namesToPurge = matchingLogs.Select(l => l.FileName.Trim())
+            .Append(storedName)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var allAssessments = await cosmos.GetAllAssessmentsAsync();
+        var affectedAssessments = allAssessments
+            .Where(a => namesToPurge.Any(n => string.Equals(a.FileName?.Trim(), n, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        // ── Fetch and validate the replacement before touching anything ──
+        LandingZoneFile? match = null;
+        List<LandingZoneFile> files;
+        try { files = await blob.ListLandingZoneFilesAsync(ct); }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { message = $"Could not read the source container: {ex.Message}. Nothing was deleted." });
+        }
+
+        byte[]? content = null;
+        try
+        {
+            match = files.FirstOrDefault(f => f.Name.Trim().Equals(sourceName, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                return NotFound(new
+                {
+                    message = $"\"{sourceName}\" was not found in the configured source container. Nothing was deleted.",
+                    hint = "Check LandingZone:ContainerName points at the container holding the file, and that the name matches exactly.",
+                    availableFiles = files.Select(f => f.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
+                });
+            }
+
+            using var buffer = new MemoryStream();
+            await match.Content.CopyToAsync(buffer, ct);
+            content = buffer.ToArray();
+        }
+        finally
+        {
+            foreach (var f in files) await f.Content.DisposeAsync();
+        }
+
+        var ext = Path.GetExtension(sourceName).ToLowerInvariant();
+        var formFile = new StreamFormFile(content, sourceName,
+            ext == ".csv" ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+        List<Dictionary<string, string>> rows;
+        try { rows = ext == ".csv" ? await ParseCsvAsync(formFile, ct) : ParseXlsx(formFile); }
+        catch (Exception ex)
+        {
+            return BadRequest(new { message = $"\"{sourceName}\" could not be parsed: {ex.Message}. Nothing was deleted." });
+        }
+
+        if (rows.Count == 0)
+            return BadRequest(new { message = $"\"{sourceName}\" contains no data rows. Nothing was deleted." });
+
+        var headers = rows[0].Keys.ToList();
+        var uploadType = ResolveUploadType(sourceName, headers, dto.UploadType);
+
+        if (uploadType == "__SKIP__")
+            return BadRequest(new { message = $"\"{sourceName}\" is a TEST_ file and is never imported. Nothing was deleted." });
+
+        var schemaError = ValidateSchema(headers, uploadType);
+        if (schemaError is not null)
+            return BadRequest(new { message = $"Schema error for \"{uploadType}\": {schemaError}. Nothing was deleted." });
+
+        var contentHash = ComputeSha256(formFile);
+        var blockingLog = await cosmos.FindUploadLogByHashAsync(contentHash);
+        var hashBlockedByOtherFile = blockingLog is not null && !matchingLogs.Any(l => l.Id == blockingLog.Id);
+
+        if (dryRun)
+        {
+            return Ok(new
+            {
+                dryRun = true,
+                plan = new
+                {
+                    storedName,
+                    sourceName,
+                    resolvedUploadType = uploadType,
+                    uploadTypeFromFileName = DetectUploadType(sourceName),
+                    uploadTypeFromColumns = DetectTypeFromColumns(headers),
+                    sourceRows = rows.Count,
+                    uploadLogRowsToDelete = matchingLogs.Select(l => new { l.Id, l.FileName, l.UploadType, l.UploadedAt, l.RecordCount }),
+                    assessmentsToDelete = affectedAssessments.Count,
+                    studentsAffected = affectedAssessments.Select(a => a.StudentId).Distinct().Count(),
+                    fileNameSpellingsPurged = namesToPurge,
+                    recalculateTiers = dto.RecalculateTiers,
+                },
+                warning = hashBlockedByOtherFile
+                    ? $"This content is already logged under a different file (\"{blockingLog!.FileName}\"), whose log row will NOT be removed — the re-import would be rejected as a duplicate. Re-import that file instead, or delete its log row first."
+                    : null,
+                message = "Nothing was changed. Re-send with ?dryRun=false to apply.",
+            });
+        }
+
+        if (hashBlockedByOtherFile)
+            return Conflict(new
+            {
+                message = $"This content is already logged under \"{blockingLog!.FileName}\", which is not one of the log rows being replaced. " +
+                          "The re-import would be rejected as a duplicate, so nothing was deleted.",
+                conflictingLogId = blockingLog.Id,
+            });
+
+        // ── Apply: delete, then import ──
+        foreach (var name in namesToPurge)
+            await cosmos.DeleteAssessmentsByFileNameAsync(name);
+
+        foreach (var log in matchingLogs)
+            await cosmos.DeleteUploadLogAsync(log.Id, log.UploadedBy);
+
+        var result = await ProcessRowsAsync(rows, uploadType, sourceName, ct);
+
+        await cosmos.CreateUploadLogAsync(new UploadLogDocument
+        {
+            Id           = Guid.NewGuid().ToString(),
+            UploadedBy   = CurrentAdminEmail,
+            FileName     = sourceName,
+            UploadType   = uploadType,
+            UploadedAt   = DateTime.UtcNow.ToString("o"),
+            RecordCount  = result.ImportedRows,
+            SkippedCount = result.SkippedRows,
+            ContentHash  = contentHash,
+            Errors       = result.Errors,
+        });
+
+        int? tiersUpdated = null;
+        if (dto.RecalculateTiers)
+        {
+            try
+            {
+                var (students, _) = await cosmos.ListStudentsAsync(1, 50_000, null, null, activeOnly: true);
+                var eligible = students.Where(s => !s.AllSubjectsOverridden).ToList();
+                tiersUpdated = await tierCalculation.ComputeAndApplyBatchAsync(eligible);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Tier recalculation failed after re-importing {File}", sourceName);
+            }
+        }
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Upload, entityType: "Reimport", entityId: sourceName,
+            details: $"Corrective re-import of \"{sourceName}\" as {uploadType}: removed {affectedAssessments.Count} assessment(s) " +
+                     $"and {matchingLogs.Count} upload log row(s) for [{string.Join(", ", namesToPurge)}], " +
+                     $"imported {result.ImportedRows} row(s), skipped {result.SkippedRows}." +
+                     (tiersUpdated is not null ? $" Recalculated {tiersUpdated} student tier(s)." : ""),
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        return Ok(new
+        {
+            dryRun = false,
+            storedName,
+            sourceName,
+            uploadType,
+            deleted = new
+            {
+                assessments = affectedAssessments.Count,
+                uploadLogRows = matchingLogs.Count,
+                fileNameSpellings = namesToPurge,
+            },
+            imported = result,
+            tiersUpdated,
+        });
+    }
+
+    public record ReimportFileRequestDto(string FileName, string? SourceFile, string? UploadType, bool RecalculateTiers = true);
+
+    /// <summary>Upload type for a re-import: an explicit override wins, then the filename, and when
+    /// the filename yields nothing better than the "demographics" default the column signatures
+    /// decide. Indiana's ILEARN exports are named e.g. "..._ADA-ZEL_StudentData_150626 PM.csv" with
+    /// no ILEARN or Checkpoint token, so filename-only detection called them demographics and the
+    /// file had to be renamed by hand before it could be imported at all.</summary>
+    internal static string ResolveUploadType(string fileName, IReadOnlyList<string> headers, string? explicitType)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitType)) return explicitType.Trim();
+
+        var fromName = DetectUploadType(fileName);
+        if (!fromName.Equals("demographics", StringComparison.OrdinalIgnoreCase)) return fromName;
+
+        var fromColumns = DetectTypeFromColumns(headers);
+        return fromColumns ?? fromName;
     }
 
     private async Task<ParseSummaryDto> ProcessRowsAsync(
@@ -1299,7 +1516,7 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
     }
 
     // Returns the most-likely upload type based on column signatures, or null if ambiguous/unknown.
-    private static string? DetectTypeFromColumns(IReadOnlyList<string> headers)
+    internal static string? DetectTypeFromColumns(IReadOnlyList<string> headers)
     {
         var headerSet = new HashSet<string>(headers, StringComparer.OrdinalIgnoreCase);
         string? best = null;
