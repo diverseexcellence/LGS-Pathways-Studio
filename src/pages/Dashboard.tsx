@@ -820,9 +820,9 @@ export default function Dashboard() {
                       />
                     }
                   />
-                  <Bar dataKey="Tier 1" stackId="a" fill={TIER_COLORS['Tier 1']} />
-                  <Bar dataKey="Tier 2" stackId="a" fill={TIER_COLORS['Tier 2']} />
                   <Bar dataKey="Tier 3" stackId="a" fill={TIER_COLORS['Tier 3']} />
+                  <Bar dataKey="Tier 2" stackId="a" fill={TIER_COLORS['Tier 2']} />
+                  <Bar dataKey="Tier 1" stackId="a" fill={TIER_COLORS['Tier 1']} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
