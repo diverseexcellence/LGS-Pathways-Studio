@@ -598,10 +598,10 @@ export default function Dashboard() {
                   content={
                     <StaticLegend
                       items={[
-                        { label: 'Below', color: '#b91c1c' },
-                        { label: 'Approaching', color: '#d97706' },
-                        { label: 'On Grade', color: '#214965' },
                         { label: 'Above', color: '#15803d' },
+                        { label: 'On Grade', color: '#214965' },
+                        { label: 'Approaching', color: '#d97706' },
+                        { label: 'Below', color: '#b91c1c' },
                       ]}
                     />
                   }
