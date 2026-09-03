@@ -23,7 +23,7 @@ interface Stats {
   totalStudents: number;
   activeCaseload: number;
   gradeData: { grade: string; proficient: number; developing: number; critical: number }[];
-  homeRoomData: { homeRoom: string; initials: string; 'Tier 1': number; 'Tier 2': number; 'Tier 3': number; total: number }[];
+  homeRoomData: { homeRoom: string; initials: string; grade: string; 'Tier 1': number; 'Tier 2': number; 'Tier 3': number; total: number }[];
 }
 
 // "-1" = Kindergarten — confirmed by LGS (Velvet Wright) on the 2026-08-14 client demo call.
@@ -32,6 +32,26 @@ function normalizeGradeLabel(raw: string | number): string {
   const cleaned = String(raw).trim().toUpperCase();
   if (cleaned === 'K' || cleaned === 'KG' || cleaned === 'KINDERGARTEN' || cleaned === '0' || cleaned === '-1') return 'K';
   return cleaned.replace(/^0+(?=\d)/, '');
+}
+
+// "3" -> "3rd", "K" (and anything non-numeric) passes through unchanged.
+function ordinalGrade(grade: string): string {
+  const n = parseInt(grade, 10);
+  if (isNaN(n)) return grade;
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1: return `${n}st`;
+    case 2: return `${n}nd`;
+    case 3: return `${n}rd`;
+    default: return `${n}th`;
+  }
+}
+
+// "Wood, Ashley" + "3" -> "Wood - 3rd", for the caseload chart's hover tooltip.
+function formatTeacherLabel(homeRoom: string, grade: string): string {
+  const lastName = homeRoom.includes(',') ? homeRoom.split(',')[0].trim() : homeRoom;
+  return grade ? `${lastName} - ${ordinalGrade(grade)}` : lastName;
 }
 
 // Single source of truth for tier colors — reused by the donut, the homeroom caseload chart,
@@ -45,7 +65,7 @@ const TIER_COLORS: Record<'Tier 1' | 'Tier 2' | 'Tier 3', string> = {
 function buildStats(students: Student[], subject: TierSubject): Stats {
   let t1 = 0, t2 = 0, t3 = 0;
   const gradeMap: Record<string, { proficient: number; developing: number; critical: number }> = {};
-  const homeRoomMap: Record<string, { tier1: number; tier2: number; tier3: number }> = {};
+  const homeRoomMap: Record<string, { tier1: number; tier2: number; tier3: number; grade: string }> = {};
 
   // Active caseload = all active students regardless of tier status
   const activeCaseload = students.filter(s => s.isActive).length;
@@ -66,7 +86,7 @@ function buildStats(students: Student[], subject: TierSubject): Stats {
     else if (tier === 'Tier 2') t2++;
     else if (tier === 'Tier 3') t3++;
 
-    if (!homeRoomMap[homeRoom]) homeRoomMap[homeRoom] = { tier1: 0, tier2: 0, tier3: 0 };
+    if (!homeRoomMap[homeRoom]) homeRoomMap[homeRoom] = { tier1: 0, tier2: 0, tier3: 0, grade: s.grade ? normalizeGradeLabel(s.grade) : '' };
     if (tier === 'Tier 1') homeRoomMap[homeRoom].tier1++;
     else if (tier === 'Tier 2') homeRoomMap[homeRoom].tier2++;
     else if (tier === 'Tier 3') homeRoomMap[homeRoom].tier3++;
@@ -105,6 +125,7 @@ function buildStats(students: Student[], subject: TierSubject): Stats {
     return {
       homeRoom: hr,
       initials,
+      grade: m.grade,
       'Tier 1': m.tier1,
       'Tier 2': m.tier2,
       'Tier 3': m.tier3,
@@ -566,9 +587,25 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={gradeProficiencyData} layout="vertical" margin={{ top: 0, right: 0, left: 0, bottom: 0 }} barSize={24}>
                 <XAxis type="number" domain={[0, 100]} hide />
-                <YAxis dataKey="grade" type="category" axisLine={false} tickLine={false} tick={{ fill: '#214965', fontSize: 12, fontWeight: 600 }} width={80} />
-                <RechartsTooltip formatter={(v: number, name: string) => [`${v}%`, name]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                <Legend iconType="square" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                <YAxis dataKey="grade" type="category" axisLine={false} tickLine={false} tick={{ fill: '#214965', fontSize: 12, fontWeight: 600 }} width={80} tickFormatter={ordinalGrade} />
+                <RechartsTooltip
+                  formatter={(v: number, name: string) => [`${v}%`, name]}
+                  labelFormatter={(label: string) => ordinalGrade(label)}
+                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                />
+                <Legend
+                  wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }}
+                  content={
+                    <StaticLegend
+                      items={[
+                        { label: 'Below', color: '#b91c1c' },
+                        { label: 'Approaching', color: '#d97706' },
+                        { label: 'On Grade', color: '#214965' },
+                        { label: 'Above', color: '#15803d' },
+                      ]}
+                    />
+                  }
+                />
                 <Bar dataKey="below" name="Below" stackId="a" fill="#b91c1c" radius={[4, 0, 0, 4]} />
                 <Bar dataKey="approaching" name="Approaching" stackId="a" fill="#d97706" />
                 <Bar dataKey="on" name="On Grade" stackId="a" fill="#214965" />
@@ -654,9 +691,9 @@ export default function Dashboard() {
                 <thead>
                   <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
                     <th className="pb-3 pr-4">Grade</th>
-                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 1'] }}>Tier 1</th>
-                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 2'] }}>Tier 2</th>
                     <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 3'] }}>Tier 3</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 2'] }}>Tier 2</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 1'] }}>Tier 1</th>
                     <th className="pb-3 pr-4">Pending</th>
                     <th className="pb-3 pr-4">Total</th>
                     <th className="pb-3" />
@@ -666,9 +703,9 @@ export default function Dashboard() {
                   {gradeRows.map(row => (
                     <tr key={row.grade} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToTeachers(row.grade)}>
                       <td className="py-3 pr-4 font-semibold text-lgs-blue">Grade {row.grade}</td>
-                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 1'] }}>{row.tier1}</td>
-                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 2'] }}>{row.tier2}</td>
                       <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 3'] }}>{row.tier3}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 2'] }}>{row.tier2}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 1'] }}>{row.tier1}</td>
                       <td className="py-3 pr-4 text-slate-400">{row.pending}</td>
                       <td className="py-3 pr-4">{row.total}</td>
                       <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
@@ -690,9 +727,9 @@ export default function Dashboard() {
                 <thead>
                   <tr className="text-left text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200">
                     <th className="pb-3 pr-4">Teacher / Class</th>
-                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 1'] }}>Tier 1</th>
-                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 2'] }}>Tier 2</th>
                     <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 3'] }}>Tier 3</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 2'] }}>Tier 2</th>
+                    <th className="pb-3 pr-4" style={{ color: TIER_COLORS['Tier 1'] }}>Tier 1</th>
                     <th className="pb-3 pr-4">Pending</th>
                     <th className="pb-3 pr-4">Total</th>
                     <th className="pb-3" />
@@ -702,9 +739,9 @@ export default function Dashboard() {
                   {teacherRows.map(row => (
                     <tr key={row.teacher} className="hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => drillToStudents((drillView as any).grade, row.teacher)}>
                       <td className="py-3 pr-4 font-semibold text-lgs-blue">{row.teacher}</td>
-                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 1'] }}>{row.tier1}</td>
-                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 2'] }}>{row.tier2}</td>
                       <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 3'] }}>{row.tier3}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 2'] }}>{row.tier2}</td>
+                      <td className="py-3 pr-4 font-semibold" style={{ color: TIER_COLORS['Tier 1'] }}>{row.tier1}</td>
                       <td className="py-3 pr-4 text-slate-400">{row.pending}</td>
                       <td className="py-3 pr-4">{row.total}</td>
                       <td className="py-3 text-slate-300"><ChevronRight className="w-4 h-4" /></td>
@@ -770,8 +807,19 @@ export default function Dashboard() {
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
                   <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
                   <YAxis dataKey="initials" type="category" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} width={40} interval={0} />
-                  <RechartsTooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} cursor={{ fill: '#f1f5f9' }} />
-                  <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                  <RechartsTooltip content={<CaseloadTooltip />} cursor={{ fill: '#f1f5f9' }} />
+                  <Legend
+                    wrapperStyle={{ paddingTop: '20px' }}
+                    content={
+                      <StaticLegend
+                        items={[
+                          { label: 'Tier 1', color: TIER_COLORS['Tier 1'] },
+                          { label: 'Tier 2', color: TIER_COLORS['Tier 2'] },
+                          { label: 'Tier 3', color: TIER_COLORS['Tier 3'] },
+                        ]}
+                      />
+                    }
+                  />
                   <Bar dataKey="Tier 1" stackId="a" fill={TIER_COLORS['Tier 1']} />
                   <Bar dataKey="Tier 2" stackId="a" fill={TIER_COLORS['Tier 2']} />
                   <Bar dataKey="Tier 3" stackId="a" fill={TIER_COLORS['Tier 3']} />
@@ -837,6 +885,37 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Fixed-order legend — Recharts' default Legend doesn't reliably preserve the order bars were
+// declared in, so charts that must read worst-to-best left-to-right build their legend from this
+// instead of the built-in auto-generated one.
+function StaticLegend({ items }: { items: { label: string; color: string }[] }) {
+  return (
+    <ul className="flex flex-wrap justify-center gap-4 text-xs font-medium text-slate-600">
+      {items.map(item => (
+        <li key={item.label} className="flex items-center gap-1.5">
+          <span className="inline-block w-2.5 h-2.5" style={{ backgroundColor: item.color }} />
+          {item.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Custom tooltip for the Caseload by Home Room chart — replaces the default label (the
+// homeroom's initials, shown on the axis) with "Last name - Nth grade" on hover.
+function CaseloadTooltip({ active, payload }: { active?: boolean; payload?: any[] }) {
+  if (!active || !payload || payload.length === 0) return null;
+  const row = payload[0].payload as { homeRoom: string; grade: string; 'Tier 1': number; 'Tier 2': number; 'Tier 3': number };
+  return (
+    <div className="bg-white rounded-lg p-3 text-xs" style={{ boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}>
+      <p className="font-semibold text-slate-700 mb-1">{formatTeacherLabel(row.homeRoom, row.grade)}</p>
+      <p className="font-medium" style={{ color: TIER_COLORS['Tier 1'] }}>Tier 1: {row['Tier 1']}</p>
+      <p className="font-medium" style={{ color: TIER_COLORS['Tier 2'] }}>Tier 2: {row['Tier 2']}</p>
+      <p className="font-medium" style={{ color: TIER_COLORS['Tier 3'] }}>Tier 3: {row['Tier 3']}</p>
     </div>
   );
 }
