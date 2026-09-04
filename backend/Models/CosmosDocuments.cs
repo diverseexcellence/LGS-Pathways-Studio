@@ -527,6 +527,11 @@ public class TierRulesetConfigDocument
         ["meets"] = 2,
         ["above"] = 3,
         ["exceeds"] = 3,
+        // Screener wording where "at" inverts the meaning: "At Risk" is a support need, not a
+        // student at grade level. Both are listed explicitly because the resolver picks the
+        // longest matching phrase, so these beat the bare "at" rather than racing it.
+        ["at risk"] = 0,
+        ["not at risk"] = 2,
     };
 
     public static Dictionary<string, Dictionary<string, double>> DefaultEvidenceWeights() => new(StringComparer.OrdinalIgnoreCase)

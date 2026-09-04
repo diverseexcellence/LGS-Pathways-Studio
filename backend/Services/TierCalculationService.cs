@@ -198,6 +198,18 @@ public class TierCalculationService(
                 continue;
             }
 
+            // Checked before resolution so an assessment the source reported no result for is not
+            // filed as a label we failed to read. IXL writes "--" for a diagnostic that was never
+            // completed; in the LGS data that is 145 rows across 96 students, and staff need to
+            // see "the test was not taken" rather than a parsing complaint.
+            if (PerformanceLevelNormalizer.IsNoResultPlaceholder(a.Proficiency))
+            {
+                rec.Counted = false;
+                rec.ExclusionReason = TierExclusionReason.NoResultReported;
+                evidence.Add(rec);
+                continue;
+            }
+
             if (!PerformanceLevelNormalizer.TryResolve(source, a.Proficiency, ruleset, out var value))
             {
                 rec.Counted = false;
@@ -308,6 +320,7 @@ public class TierCalculationService(
         [TierExclusionReason.Superseded]           = "replaced by a more recent result for the same period",
         [TierExclusionReason.SourceExcluded]       = "the source is not part of the weighted calculation",
         [TierExclusionReason.UnrecognizedCategory] = "the proficiency level was not recognised",
+        [TierExclusionReason.NoResultReported]     = "the source reported no result, so the assessment was not completed",
         [TierExclusionReason.UnknownSubject]       = "the subject could not be identified as ELA or Math",
     };
 
@@ -393,6 +406,11 @@ public static class TierExclusionReason
 
     /// <summary>The proficiency/performance label could not be mapped to a 0-3 value.</summary>
     public const string UnrecognizedCategory = "unrecognized_category";
+
+    /// <summary>The source explicitly reported no result — an IXL "--" for a diagnostic that was
+    /// never completed, or an "N/A". A data-collection gap, not a data-quality problem, and the
+    /// two need different follow-up.</summary>
+    public const string NoResultReported = "no_result_reported";
 
     /// <summary>No checkpoint or benchmark window could be resolved, so no evidence weight
     /// applies. Usually a fixable data problem rather than an expected omission.</summary>

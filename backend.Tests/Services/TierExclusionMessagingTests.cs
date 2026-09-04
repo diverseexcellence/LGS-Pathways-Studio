@@ -93,5 +93,6 @@ public class TierExclusionMessagingTests
         Assert.Equal("unknown_period", TierExclusionReason.UnknownPeriod);
         Assert.Equal("unknown_subject", TierExclusionReason.UnknownSubject);
         Assert.Equal("superseded", TierExclusionReason.Superseded);
+        Assert.Equal("no_result_reported", TierExclusionReason.NoResultReported);
     }
 }

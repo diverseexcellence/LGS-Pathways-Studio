@@ -122,6 +122,7 @@ const EXCLUSION_LABELS: Record<string, string> = {
   source_excluded: 'this source is not part of the weighted calculation',
   unrecognized_category: 'the proficiency level was not recognised',
   unknown_subject: 'the subject could not be identified as ELA or Math',
+  no_result_reported: 'the source reported no result, so the assessment was not completed',
 };
 
 function exclusionText(reason?: string | null): string {

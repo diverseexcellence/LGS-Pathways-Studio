@@ -75,13 +75,30 @@ public class TierEvidencePersistenceTests
     }
 
     [Fact]
-    public void UnreadableLabel_IsPersistedAsAnUnrecognizedCategoryExclusion()
+    public void IxlPlaceholder_IsPersistedAsANoResultExclusion()
     {
-        // The IXL "--" placeholder in the dev data, and any vendor label the ruleset cannot map.
-        // Correctly excluded from the score, but the administrator has to be able to see it.
+        // The IXL "--" placeholder: the diagnostic was never completed. Correctly excluded from
+        // the score, but the administrator has to be able to see it — and to see that the cause is
+        // a missing test rather than a value the engine could not read.
         var target = FreshPending();
         var computed = TierCalculationService.ComputeSubject("ELA",
             [AssessmentBuilder.Ixl("ELA", "BOY", "--", "2026-08-25")], Ruleset);
+
+        TierCalculationService.ApplySubject(target, computed, "2.0", Now, out _);
+
+        var evidence = Assert.Single(target.Evidence);
+        Assert.Equal(TierExclusionReason.NoResultReported, evidence.ExclusionReason);
+        Assert.Equal("all_evidence_excluded", target.PendingReason);
+    }
+
+    [Fact]
+    public void GenuinelyUnreadableLabel_IsPersistedAsAnUnrecognizedCategoryExclusion()
+    {
+        // A value that is present and non-placeholder but that the ruleset cannot map — the case
+        // that actually warrants a data-quality follow-up with the source.
+        var target = FreshPending();
+        var computed = TierCalculationService.ComputeSubject("ELA",
+            [AssessmentBuilder.Ixl("ELA", "BOY", "Watch", "2026-08-25")], Ruleset);
 
         TierCalculationService.ApplySubject(target, computed, "2.0", Now, out _);
 
