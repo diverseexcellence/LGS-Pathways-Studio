@@ -9,7 +9,9 @@ const UPLOAD_TYPES = [
   { value: 'IXL', label: 'IXL Diagnostic Data' },
   { value: 'Acadience', label: 'Acadience Reading Data' },
   { value: 'IREAD', label: 'IREAD Data' },
-  { value: 'WIDA', label: 'WIDA Data' },
+  // WIDA is intentionally absent: the backend has no schema, column signature or row handling for
+  // it, so selecting it returned a success response having imported nothing. Re-add it here only
+  // once UploadController can actually store it.
 ];
 
 export default function DataIngestion() {

@@ -65,38 +65,65 @@ public class TierCalculationService(
         var computation = ComputeAll(student, assessments, ruleset);
         var now = DateTime.UtcNow.ToString("o");
 
-        var elaChanged = ApplySubject(student.ElaTier, computation.Ela, computation.RulesetVersion, now);
-        var mathChanged = ApplySubject(student.MathTier, computation.Math, computation.RulesetVersion, now);
+        var elaChanged = ApplySubject(student.ElaTier, computation.Ela, computation.RulesetVersion, now, out var elaTierMoved);
+        var mathChanged = ApplySubject(student.MathTier, computation.Math, computation.RulesetVersion, now, out var mathTierMoved);
 
         if (!elaChanged && !mathChanged) return false;
 
         student.LastUpdated = now;
         await cosmos.UpsertStudentAsync(student);
 
-        await audit.LogAsync(
-            adminId: systemAdminId,
-            adminEmail: systemAdminEmail,
-            eventType: AuditEventType.TierRecommendation,
-            entityType: "Student",
-            entityId: student.StudentId,
-            details: $"System Tier Recommendation — {student.FullName}: " +
-                     $"ELA {DescribeChange(computation.Ela)} | Math {DescribeChange(computation.Math)} | " +
-                     $"Ruleset v{computation.RulesetVersion}");
+        // Audit only a material movement in a recommendation. Evidence-only updates — a newly
+        // excluded IREAD result, a label the engine could not read, a refreshed explanation —
+        // are persisted but deliberately not audited: they report no change to any tier, and
+        // logging them would bury the real recommendation history under routine re-imports.
+        if (elaTierMoved || mathTierMoved)
+        {
+            await audit.LogAsync(
+                adminId: systemAdminId,
+                adminEmail: systemAdminEmail,
+                eventType: AuditEventType.TierRecommendation,
+                entityType: "Student",
+                entityId: student.StudentId,
+                details: $"System Tier Recommendation — {student.FullName}: " +
+                         $"ELA {DescribeChange(computation.Ela)} | Math {DescribeChange(computation.Math)} | " +
+                         $"Ruleset v{computation.RulesetVersion}");
+        }
 
         return true;
     }
 
     // A subject an administrator has overridden is never overwritten by the system.
-    private static bool ApplySubject(SubjectTier target, SubjectTierComputation result, string rulesetVersion, string now)
+    //
+    // Returns whether anything needs persisting; `tierMoved` reports the narrower question of
+    // whether the recommendation itself changed, which is what gets audited.
+    //
+    // The distinction matters because a student's evidence can change without their tier, score
+    // or data-point count moving at all: an IREAD result arrives for a subject IREAD is excluded
+    // from, a source sends a proficiency label the engine cannot map, or a duplicate is
+    // superseded. Comparing only the four numeric fields treated those as "no change" and
+    // skipped the write — discarding the evidence trail, the pendingReason and the reasoning the
+    // engine had just computed. A student whose only result was excluded then showed a bare
+    // "Pending" with no explanation, and tier-data-quality (which reports from exactly these
+    // persisted fields) could not see the excluded record at all.
+    internal static bool ApplySubject(
+        SubjectTier target, SubjectTierComputation result, string rulesetVersion, string now, out bool tierMoved)
     {
+        tierMoved = false;
         if (TierStatus.IsAdminOverride(target.Status)) return false;
 
-        var changed = target.Tier != result.Tier
+        tierMoved = target.Tier != result.Tier
             || target.Status != result.Status
             || target.Score != result.Score
             || target.DataPoints != result.DataPoints;
 
-        if (!changed) return false;
+        var newEvidence = result.Evidence.Take(24).ToList();
+        var explanationChanged = target.PendingReason != result.PendingReason
+            || target.Reasoning != result.Reasoning
+            || target.RulesetVersion != rulesetVersion
+            || !EvidenceMatches(target.Evidence, newEvidence);
+
+        if (!tierMoved && !explanationChanged) return false;
 
         target.Tier = result.Tier;
         target.Status = result.Status;
@@ -106,7 +133,30 @@ public class TierCalculationService(
         target.Reasoning = result.Reasoning;
         target.RulesetVersion = rulesetVersion;
         target.ComputedAt = now;
-        target.Evidence = result.Evidence.Take(24).ToList();
+        target.Evidence = newEvidence;
+        return true;
+    }
+
+    /// <summary>Order-sensitive comparison of the persisted evidence trail against a freshly
+    /// computed one. ComputeSubject emits counted evidence first and then exclusions, so a stable
+    /// input produces a stable order and this does not churn.</summary>
+    private static bool EvidenceMatches(List<TierEvidenceRecord> stored, List<TierEvidenceRecord> fresh)
+    {
+        if (stored.Count != fresh.Count) return false;
+        for (var i = 0; i < stored.Count; i++)
+        {
+            var a = stored[i];
+            var b = fresh[i];
+            if (a.AssessmentId != b.AssessmentId
+                || a.Source != b.Source
+                || a.Period != b.Period
+                || a.Category != b.Category
+                || a.Value != b.Value
+                || a.Weight != b.Weight
+                || a.Date != b.Date
+                || a.Counted != b.Counted
+                || a.ExclusionReason != b.ExclusionReason) return false;
+        }
         return true;
     }
 

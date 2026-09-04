@@ -28,6 +28,19 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
         if (ext is not ".csv" and not ".xlsx") return BadRequest(new { message = "Only .csv and .xlsx files accepted" });
 
+        // An upload type with no schema, no column signature and no row handling cannot import
+        // anything, but every stage downstream treats it as valid: ValidateSchema returns null for
+        // an unknown type, so the file parsed, uploaded and logged, then every row was skipped and
+        // the response was a 200 that looked like a successful import of zero rows. Reject it here
+        // instead — this covers a typo, a stale client, and a type added to the picker before the
+        // backend supports it.
+        if (!SupportedUploadTypes.Contains(uploadType))
+            return BadRequest(new
+            {
+                message = $"Unsupported data type \"{uploadType}\". Choose one of: " +
+                          $"{string.Join(", ", SupportedUploadTypes.OrderBy(t => t, StringComparer.OrdinalIgnoreCase))}."
+            });
+
         // ── Task 34: duplicate file prevention via SHA-256 content hash ──────────
         var contentHash = ComputeSha256(file);
         var existingLog = await cosmos.FindUploadLogByHashAsync(contentHash);
@@ -1466,6 +1479,11 @@ public class UploadController(ICosmosDbService cosmos, IBlobStorageService blob,
         var hash = SHA256.HashData(stream);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    // The upload types the row processor can actually store data for. Kept next to
+    // RequiredColumnGroups so adding a type forces a decision about its schema at the same time.
+    internal static readonly HashSet<string> SupportedUploadTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "demographics", "ILEARN", "IXL", "Acadience", "IREAD" };
 
     // Required columns per upload type — at least one column from each group must be present.
     // Groups are OR-ed within themselves; all groups are AND-ed across.

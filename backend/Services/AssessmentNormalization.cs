@@ -68,12 +68,20 @@ public static class AssessmentNormalization
     {
         if (raw is null) return null;
         var v = raw.Trim();
+        // "No"/"Yes" are the values Indiana's IREAD export actually carries in its pass column —
+        // every IREAD record in the dev data uses them, and without these two cases they fell
+        // through to `return raw` and surfaced on the profile as a bare "Yes"/"No" instead of a
+        // proficiency label. Matched before the single-letter forms so "N"/"Y" stay distinct.
         if (v.Contains("Did Not Pass", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("No", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("N", StringComparison.OrdinalIgnoreCase) ||
             v.Equals("Fail", StringComparison.OrdinalIgnoreCase) ||
             v.Equals("F", StringComparison.OrdinalIgnoreCase) ||
             v.Equals("Not Passed", StringComparison.OrdinalIgnoreCase)) return "Below Proficiency";
         if (v.Equals("Passed", StringComparison.OrdinalIgnoreCase) ||
             v.Equals("Pass", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("Yes", StringComparison.OrdinalIgnoreCase) ||
+            v.Equals("Y", StringComparison.OrdinalIgnoreCase) ||
             v.Equals("P", StringComparison.OrdinalIgnoreCase)) return "At Proficiency";
         if (v.Contains("Waived", StringComparison.OrdinalIgnoreCase)) return "Waived";
         if (v.Contains("Exempt", StringComparison.OrdinalIgnoreCase)) return "Exempt";
