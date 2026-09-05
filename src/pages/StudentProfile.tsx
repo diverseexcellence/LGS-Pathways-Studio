@@ -15,7 +15,7 @@ const AUDIT_EVENT_LABELS: Record<string, string> = {
   Login: 'Login',
   Error: 'System Error',
 };
-import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X, Sparkles } from 'lucide-react';
+import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X, Sparkles, Pencil } from 'lucide-react';
 
 const MTSS_STRATEGIES: Record<string, string[]> = {
   "Tier 1": [
@@ -106,11 +106,6 @@ function normalizeGradeLabel(raw?: string | null): string {
 // still carry, so an existing override keeps displaying (and keeps blocking recalculation).
 function isAdminOverride(status?: string | null): boolean {
   return status === 'Admin Override' || status === 'Finalized';
-}
-
-// Legacy "Finalized" documents display under the current name.
-function statusLabel(status?: string | null): string {
-  return isAdminOverride(status) ? 'Admin Override' : (status ?? '');
 }
 
 // Why an assessment was left out of the weighted score. The engine stores machine tokens; these
@@ -376,11 +371,20 @@ export default function StudentProfile() {
       : <ArrowDown className="w-4 h-4 ml-1 text-lgs-blue" />;
   }
 
-  function tierBadgeColor(tier: string | null | undefined) {
-    return tier === 'Tier 1' ? 'bg-green-100 text-green-700 border-green-200' :
-      tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
-      tier === 'Tier 3' ? 'bg-red-100 text-red-700 border-red-200' :
-      'bg-slate-100 text-slate-600 border-slate-200';
+  function tierBadgeColor(tier: string | null | undefined, status: string | null | undefined) {
+    // Admin Override renders solid/saturated; System Recommended (and Pending) render outlined —
+    // provenance reads from the pill's fill, not just the caption underneath it.
+    const override = isAdminOverride(status);
+    if (override) {
+      return tier === 'Tier 1' ? 'bg-green-600 text-white border-green-600' :
+        tier === 'Tier 2' ? 'bg-yellow-600 text-white border-yellow-600' :
+        tier === 'Tier 3' ? 'bg-red-600 text-white border-red-600' :
+        'bg-slate-500 text-white border-slate-500';
+    }
+    return tier === 'Tier 1' ? 'bg-white text-green-700 border-green-400' :
+      tier === 'Tier 2' ? 'bg-white text-yellow-700 border-yellow-400' :
+      tier === 'Tier 3' ? 'bg-white text-red-700 border-red-400' :
+      'bg-slate-100 text-slate-600 border-slate-300';
   }
 
   function pendingReasonText(reason: string | null | undefined) {
@@ -463,12 +467,13 @@ export default function StudentProfile() {
             {([['ELA', student.elaTier], ['Math', student.mathTier]] as const).map(([label, t]) => (
               <div key={label} className="text-right">
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">{label}</p>
-                <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border ${tierBadgeColor(t?.tier)}`}>
+                <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border-2 ${tierBadgeColor(t?.tier, t?.status)}`}>
+                  {isAdminOverride(t?.status) && <Pencil className="w-3.5 h-3.5" />}
                   {t?.tier || 'Pending'}
                 </span>
                 {t?.status && t.status !== 'Pending' && (
                   <p className="text-xs text-slate-400 mt-1">
-                    {statusLabel(t.status)}{t.score != null ? ` · score ${t.score.toFixed(2)} · from ${t.dataPoints} assessment${t.dataPoints === 1 ? '' : 's'}` : ''}
+                    {isAdminOverride(t.status) ? 'Admin Override' : t.status}{t.score != null ? ` · score ${t.score.toFixed(2)} · from ${t.dataPoints} assessment${t.dataPoints === 1 ? '' : 's'}` : ''}
                   </p>
                 )}
                 {t?.status === 'Pending' && (
