@@ -24,9 +24,11 @@ public interface ICosmosDbService
 
     // Assessments
     Task<List<AssessmentDocument>> GetAssessmentsAsync(string studentId, string? subject = null);
+    Task<AssessmentDocument?> GetAssessmentAsync(string studentId, string assessmentId);
     Task<List<AssessmentDocument>> GetAllAssessmentsAsync();
     Task CreateAssessmentAsync(AssessmentDocument assessment);
     Task UpsertAssessmentAsync(AssessmentDocument assessment);
+    Task DeleteAssessmentAsync(string studentId, string assessmentId);
     Task DeleteAssessmentsByFileNameAsync(string fileName);
     Task<int> DeleteAllAssessmentsAsync();
 
@@ -399,11 +401,27 @@ public class CosmosDbService : ICosmosDbService
         return all;
     }
 
+    public async Task<AssessmentDocument?> GetAssessmentAsync(string studentId, string assessmentId)
+    {
+        try
+        {
+            var res = await Assessments.ReadItemAsync<AssessmentDocument>(assessmentId, new PartitionKey(studentId));
+            return res.Resource;
+        }
+        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
     public async Task CreateAssessmentAsync(AssessmentDocument assessment)
         => await Assessments.CreateItemAsync(assessment, new PartitionKey(assessment.StudentId));
 
     public async Task UpsertAssessmentAsync(AssessmentDocument assessment)
         => await Assessments.UpsertItemAsync(assessment, new PartitionKey(assessment.StudentId));
+
+    public async Task DeleteAssessmentAsync(string studentId, string assessmentId)
+        => await Assessments.DeleteItemAsync<AssessmentDocument>(assessmentId, new PartitionKey(studentId));
 
     public async Task<int> DeleteAllAssessmentsAsync()
     {

@@ -145,6 +145,41 @@ export interface Assessment {
   rawFields?: Record<string, string>;
 }
 
+// One hand-entered assessment result. Mirrors the fields the CSV row processor reads, and is
+// normalized server-side by exactly the same code, so a manual record is weighted by the tier
+// engine identically to an imported one.
+export interface AssessmentInput {
+  uploadType: string;
+  subject?: string | null;
+  period?: string | null;
+  score?: number | null;
+  proficiency?: string | null;
+  date?: string | null;
+}
+
+// Demographics for a hand-created student, plus the records to tier them from.
+export interface StudentInput {
+  fullName: string;
+  dob?: string | null;
+  stn?: string | null;
+  localId?: string | null;
+  classGroup?: string | null;
+  grade?: string | null;
+  gender?: string | null;
+  ethnicity?: string | null;
+  ellStatus?: string | null;
+  spedStatus?: string | null;
+  section504?: string | null;
+  homeRoom?: string | null;
+  entryDate?: string | null;
+  exitDate?: string | null;
+  lunchStatus?: string | null;
+  zipCode?: string | null;
+  records?: AssessmentInput[];
+  // Only set after the caller has seen a duplicate-identifier conflict and chosen to proceed.
+  allowDuplicate?: boolean;
+}
+
 export interface AISummary {
   id: string;
   studentId: string;
@@ -216,6 +251,15 @@ export const studentsApi = {
 
   get: (id: string) => request<Student>(`/api/students/${id}`),
 
+  // Creates one student by hand, optionally with their assessment history, and runs the tier engine
+  // over the result before returning — so the student comes back already tiered (or already
+  // Pending with a reason), exactly as an imported one would be.
+  create: (data: StudentInput) =>
+    request<Student>('/api/students', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   update: (id: string, data: Partial<Student>) =>
     request<Student>(`/api/students/${id}`, {
       method: 'PATCH',
@@ -249,6 +293,48 @@ export const assessmentsApi = {
 
   bySubject: (studentId: string, subject: string) =>
     request<Assessment[]>(`/api/assessments?studentId=${studentId}&subject=${subject}`),
+
+  // All three writes re-run the tier engine server-side and return the updated student, so the
+  // profile never shows a tier that predates the record change the user just made.
+  create: (studentId: string, data: AssessmentInput) =>
+    request<{ assessment: Assessment; student: Student }>(`/api/students/${studentId}/assessments`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  update: (studentId: string, assessmentId: string, data: AssessmentInput) =>
+    request<{ assessment: Assessment; student: Student }>(
+      `/api/students/${studentId}/assessments/${assessmentId}`,
+      { method: 'PUT', body: JSON.stringify(data) },
+    ),
+
+  remove: (studentId: string, assessmentId: string) =>
+    request<{ student: Student }>(`/api/students/${studentId}/assessments/${assessmentId}`, {
+      method: 'DELETE',
+    }),
+};
+
+// The sources the backend can store records for (UploadController.SupportedUploadTypes minus
+// "demographics", which is roster data rather than an assessment result).
+export const ASSESSMENT_SOURCES = ['ILEARN', 'IXL', 'Acadience', 'IREAD'] as const;
+export type AssessmentSource = typeof ASSESSMENT_SOURCES[number];
+
+// Period keys each source is weighted by. A record whose period falls outside these carries no
+// evidence weight and is excluded from the score, so entry is restricted to the real windows.
+export const SOURCE_PERIODS: Record<AssessmentSource, string[]> = {
+  ILEARN: ['CP1', 'CP2', 'CP3', 'SPRING'],
+  IXL: ['BOY', 'MOY', 'EOY'],
+  Acadience: ['BOY', 'MOY', 'EOY'],
+  IREAD: ['SPRING'],
+};
+
+// Fallback performance levels per source, used until the live ruleset loads. The ruleset's
+// categoryValues are authoritative — a label outside them resolves to no value at all.
+export const SOURCE_PROFICIENCY_FALLBACK: Record<AssessmentSource, string[]> = {
+  ILEARN: ['Below Proficiency', 'Approaching Proficiency', 'At Proficiency', 'Above Proficiency'],
+  IXL: ['Far Below Grade Level', 'Below Grade Level', 'On Grade Level', 'Above Grade Level'],
+  Acadience: ['Well Below Benchmark', 'Below Benchmark', 'At Benchmark', 'Above Benchmark'],
+  IREAD: ['Did Not Pass', 'Passed'],
 };
 
 export interface LandingZoneImportStatus {

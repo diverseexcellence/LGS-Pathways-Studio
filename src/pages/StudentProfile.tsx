@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, configApi, Student, Assessment, AISummary, AuditEntry, CollaborationNote, TierRuleset } from '../lib/api';
+import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, configApi, Student, Assessment, AssessmentInput, AISummary, AuditEntry, CollaborationNote, TierRuleset } from '../lib/api';
 import { parseFlexibleDate, formatUsDate, formatUsDateTime } from '../lib/dates';
+import AssessmentRecordFields, { EMPTY_RECORD } from '../components/AssessmentRecordFields';
 
 const AUDIT_EVENT_LABELS: Record<string, string> = {
   TierRecommendation: 'Tier Recommendation',
@@ -16,6 +17,41 @@ const AUDIT_EVENT_LABELS: Record<string, string> = {
   Error: 'System Error',
 };
 import { User, BookOpen, Clock, AlertTriangle, CheckCircle, MessageSquare, Info, Trash2, ArrowUpDown, ArrowUp, ArrowDown, ClipboardList, Plus, X, Sparkles, Pencil } from 'lucide-react';
+
+// The editable student fields, as form strings. Also the baseline the save diffs against, so both
+// sides of that comparison are built the same way.
+function openEditValues(student: Student): Record<string, string> {
+  return {
+    fullName: student.fullName ?? '',
+    stn: student.stn ?? '',
+    dob: student.dob ?? '',
+    grade: student.grade ?? '',
+    classGroup: student.classGroup ?? '',
+    homeRoom: student.homeRoom ?? '',
+    gender: student.gender ?? '',
+    ethnicity: student.ethnicity ?? '',
+    ellStatus: student.ellStatus ?? '',
+    spedStatus: student.spedStatus ?? '',
+    section504: student.section504 ?? '',
+    lunchStatus: student.lunchStatus ?? '',
+    entryDate: student.entryDate ?? '',
+    exitDate: student.exitDate ?? '',
+  };
+}
+
+// A stored assessment, back in the shape the entry form uses. The form offers the normalized
+// period/level vocabularies, so an edit starts from the normalized values rather than the raw
+// source text — re-saving a record must not undo the normalization it already went through.
+function toRecordInput(a: Assessment): AssessmentInput {
+  return {
+    uploadType: a.uploadType,
+    subject: a.subject ?? '',
+    period: a.period ?? '',
+    score: a.score ?? null,
+    proficiency: a.proficiency ?? '',
+    date: a.dateIso ?? '',
+  };
+}
 
 const MTSS_STRATEGIES: Record<string, string[]> = {
   "Tier 1": [
@@ -199,6 +235,19 @@ export default function StudentProfile() {
   const [showDemographics, setShowDemographics] = useState(false);
   const [selectedAssessment, setSelectedAssessment] = useState<Assessment | null>(null);
 
+  // Editing the student's own fields. Only fields the user actually changed are sent: the API
+  // applies whatever it receives, so posting the whole form would rewrite — and in the audit
+  // trail, report a change to — every column on the record.
+  const [editForm, setEditForm] = useState<Record<string, string> | null>(null);
+  const [isSavingStudent, setIsSavingStudent] = useState(false);
+
+  // Add/edit one assessment record. Every save re-runs the tier engine server-side and returns the
+  // updated student, so the tier on screen always reflects the records beneath it.
+  const [recordModal, setRecordModal] = useState<{ id: string | null; value: AssessmentInput } | null>(null);
+  const [isSavingRecord, setIsSavingRecord] = useState(false);
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
+  const [recordError, setRecordError] = useState('');
+
   // Newest assessment first by default (BRD: "Sorting by Date descending shows the most recent
   // assessment at the top"). Without this the table renders in whatever order the API returned.
   const [assessmentSortConfig, setAssessmentSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(
@@ -318,6 +367,81 @@ export default function StudentProfile() {
     } finally {
       setIsGeneratingRec(false);
     }
+  }
+
+  function openEditStudent() {
+    if (student) setEditForm(openEditValues(student));
+  }
+
+  async function handleSaveStudent() {
+    if (!editForm || !student) return;
+    if (!editForm.fullName.trim()) { alert('Full name cannot be blank.'); return; }
+
+    const original = openEditValues(student);
+    const changes = Object.fromEntries(
+      Object.entries(editForm).filter(([key, value]) => value !== original[key])
+    );
+    if (Object.keys(changes).length === 0) { setEditForm(null); return; }
+
+    setIsSavingStudent(true);
+    try {
+      const updated = await studentsApi.update(studentId, changes as any);
+      setStudent(updated);
+      setEditForm(null);
+      const auditResult = await studentAuditApi.list(studentId)
+        .catch(() => ({ items: [], total: 0, page: 1, pageSize: 50 }));
+      setAuditEntries(auditResult.items);
+    } catch (e: any) {
+      alert('Failed to save: ' + e.message);
+    } finally {
+      setIsSavingStudent(false);
+    }
+  }
+
+  async function handleSaveRecord() {
+    if (!recordModal) return;
+    setIsSavingRecord(true);
+    setRecordError('');
+    try {
+      const result = recordModal.id
+        ? await assessmentsApi.update(studentId, recordModal.id, recordModal.value)
+        : await assessmentsApi.create(studentId, recordModal.value);
+      setStudent(result.student);
+      setRecordModal(null);
+      await refreshRecordsAndAudit();
+    } catch (e: any) {
+      setRecordError(e.message || 'Could not save the record.');
+    } finally {
+      setIsSavingRecord(false);
+    }
+  }
+
+  async function handleDeleteRecord(assessment: Assessment) {
+    if (!confirm(
+      `Delete this ${assessment.uploadType} ${assessment.subject ?? ''} record? ` +
+      'The tier will be recalculated without it.'
+    )) return;
+    setDeletingRecordId(assessment.id);
+    try {
+      const result = await assessmentsApi.remove(studentId, assessment.id);
+      setStudent(result.student);
+      await refreshRecordsAndAudit();
+    } catch (e: any) {
+      alert('Failed to delete the record: ' + e.message);
+    } finally {
+      setDeletingRecordId(null);
+    }
+  }
+
+  // The record list and the audit trail both change on every record write; the tier comes back on
+  // the write response itself, so it is never re-fetched here.
+  async function refreshRecordsAndAudit() {
+    const [records, auditResult] = await Promise.all([
+      assessmentsApi.byStudent(studentId).catch(() => assessments),
+      studentAuditApi.list(studentId).catch(() => ({ items: [], total: 0, page: 1, pageSize: 50 })),
+    ]);
+    setAssessments(records);
+    setAuditEntries(auditResult.items);
   }
 
   async function handleGenerateAI() {
@@ -518,8 +642,15 @@ export default function StudentProfile() {
             <span>Exit: <span className="text-slate-600">{formatUsDate(student.exitDate)}</span></span>
           )}
           <button
+            onClick={openEditStudent}
+            className="ml-auto flex items-center gap-1 text-slate-500 hover:text-lgs-blue font-medium text-xs"
+          >
+            <Pencil className="w-3 h-3" />
+            Edit Details
+          </button>
+          <button
             onClick={() => setShowDemographics(true)}
-            className="ml-auto text-lgs-red hover:underline font-medium text-xs"
+            className="text-lgs-red hover:underline font-medium text-xs"
           >
             View All Demographics →
           </button>
@@ -531,12 +662,24 @@ export default function StudentProfile() {
         <div className="lg:col-span-2 space-y-6">
           {/* Assessments */}
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <h2 className="text-lg font-semibold text-lgs-blue mb-4 flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-lgs-red" />
-              Academic Assessments
-            </h2>
+            <div className="flex items-center justify-between mb-4 gap-4">
+              <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-lgs-red" />
+                Academic Assessments
+              </h2>
+              <button
+                onClick={() => { setRecordError(''); setRecordModal({ id: null, value: { ...EMPTY_RECORD } }); }}
+                className="shrink-0 flex items-center gap-1 px-3 py-1.5 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark transition-colors"
+                title="Enter an assessment result by hand and recalculate the tier"
+              >
+                <Plus className="w-4 h-4" />
+                Add Record
+              </button>
+            </div>
             {assessments.length === 0 ? (
-              <p className="text-slate-500 text-sm">No assessment data available.</p>
+              <p className="text-slate-500 text-sm">
+                No assessment data yet. Add a record to have the tier engine score this student.
+              </p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
@@ -554,7 +697,7 @@ export default function StudentProfile() {
                           <div className="flex items-center">{col.label}<SortIcon colKey={col.key} /></div>
                         </th>
                       ))}
-                      <th className="px-4 py-3 text-right">Details</th>
+                      <th className="px-2 py-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -588,10 +731,34 @@ export default function StudentProfile() {
                               'bg-slate-100 text-slate-700'
                             }`}>{d.proficiency}</span>
                           </td>
-                          <td className="px-4 py-3 text-right">
-                            <button onClick={() => setSelectedAssessment(a)} className="text-lgs-blue hover:underline text-xs font-medium" title="View Details">
-                              Details
-                            </button>
+                          {/* Icon-only: this table sits in a two-thirds column and the proficiency
+                              badges already wrap at that width, so a text label here pushed the
+                              last action out of view entirely. */}
+                          <td className="px-2 py-3">
+                            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                              <button
+                                onClick={() => setSelectedAssessment(a)}
+                                className="text-slate-400 hover:text-lgs-blue"
+                                title="View full details for this record"
+                              >
+                                <Info className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => { setRecordError(''); setRecordModal({ id: a.id, value: toRecordInput(a) }); }}
+                                className="text-slate-400 hover:text-lgs-blue"
+                                title="Edit this record and recalculate the tier"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteRecord(a)}
+                                disabled={deletingRecordId === a.id}
+                                className="text-slate-400 hover:text-red-500 disabled:opacity-40"
+                                title="Delete this record and recalculate the tier"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -865,6 +1032,124 @@ export default function StudentProfile() {
           </ul>
         )}
       </div>
+
+      {/* Add / edit one assessment record — the tier is recalculated on save */}
+      {recordModal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-1">
+              <h3 className="text-lg font-bold text-slate-900">
+                {recordModal.id ? 'Edit Assessment Record' : 'Add Assessment Record'}
+              </h3>
+              <button onClick={() => setRecordModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-500 mb-4">
+              Saved records are normalized and scored exactly as imported ones are. The tier is
+              recalculated as soon as you save — except for a subject set by Admin Override, which is
+              left as it is.
+            </p>
+
+            <AssessmentRecordFields
+              value={recordModal.value}
+              ruleset={tierRuleset}
+              onChange={next => setRecordModal(prev => (prev ? { ...prev, value: next } : prev))}
+            />
+
+            {recordError && <p className="text-sm text-red-600 mt-3">{recordError}</p>}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setRecordModal(null)} className="px-4 py-2 text-slate-700 font-medium hover:bg-slate-100 rounded-lg transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveRecord}
+                disabled={isSavingRecord}
+                className="px-4 py-2 bg-lgs-red text-white font-medium hover:bg-lgs-red-dark rounded-lg disabled:opacity-50"
+              >
+                {isSavingRecord ? 'Saving…' : 'Save & Recalculate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit the student's own fields */}
+      {editForm && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-slate-900">Edit Student Details</h3>
+              <button onClick={() => setEditForm(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {([
+                ['fullName', 'Full Name', 'text'],
+                ['stn', 'STN', 'text'],
+                ['dob', 'Date of Birth', 'date'],
+                ['grade', 'Grade', 'text'],
+                ['classGroup', 'Class Group', 'text'],
+                ['homeRoom', 'Homeroom', 'text'],
+                ['gender', 'Gender', 'text'],
+                ['ethnicity', 'Ethnicity', 'text'],
+                ['lunchStatus', 'Lunch Status', 'text'],
+                ['entryDate', 'Entry Date', 'date'],
+                ['exitDate', 'Exit Date', 'date'],
+              ] as const).map(([key, label, type]) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+                  <input
+                    type={type}
+                    value={editForm[key] ?? ''}
+                    onChange={e => setEditForm(prev => (prev ? { ...prev, [key]: e.target.value } : prev))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none"
+                  />
+                </div>
+              ))}
+              {([
+                ['ellStatus', 'EL Status'],
+                ['spedStatus', 'Special Education'],
+                ['section504', '504 Plan'],
+              ] as const).map(([key, label]) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+                  <select
+                    value={editForm[key] ?? ''}
+                    onChange={e => setEditForm(prev => (prev ? { ...prev, [key]: e.target.value } : prev))}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none"
+                  >
+                    <option value="">Not recorded</option>
+                    <option value="Yes">Yes</option>
+                    <option value="No">No</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs text-slate-400 mt-4">
+              Demographics only. Tiers are changed with Generate Recommendation or the per-subject
+              Admin Override, and every edit here is recorded in the audit trail.
+            </p>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setEditForm(null)} className="px-4 py-2 text-slate-700 font-medium hover:bg-slate-100 rounded-lg transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveStudent}
+                disabled={isSavingStudent}
+                className="px-4 py-2 bg-lgs-red text-white font-medium hover:bg-lgs-red-dark rounded-lg disabled:opacity-50"
+              >
+                {isSavingStudent ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Demographics Modal */}
       {showDemographics && (

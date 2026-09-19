@@ -5,6 +5,7 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import StudentsList from './pages/StudentsList';
 import StudentProfile from './pages/StudentProfile';
+import StudentNew from './pages/StudentNew';
 import DataIngestion from './pages/DataIngestion';
 import ExportPage from './pages/ExportPage';
 
@@ -27,6 +28,9 @@ function AppRoutes() {
       <Route path="/" element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="students" element={<ProtectedRoute><StudentsList /></ProtectedRoute>} />
+        {/* Declared before students/:id so "new" is the add form, not a lookup for a student
+            whose id is literally "new". */}
+        <Route path="students/new" element={<ProtectedRoute><StudentNew /></ProtectedRoute>} />
         <Route path="students/:id" element={<ProtectedRoute><StudentProfile /></ProtectedRoute>} />
         <Route path="upload" element={<ProtectedRoute><DataIngestion /></ProtectedRoute>} />
         <Route path="export" element={<ProtectedRoute><ExportPage /></ProtectedRoute>} />

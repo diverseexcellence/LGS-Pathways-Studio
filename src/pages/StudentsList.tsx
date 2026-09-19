@@ -5,7 +5,7 @@ import { ColDef, GridReadyEvent, IGetRowsParams, GridApi } from 'ag-grid-communi
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
 import { studentsApi, exportApi, Student, SubjectTier } from '../lib/api';
-import { Users, Search, RefreshCw, Download } from 'lucide-react';
+import { Users, Search, RefreshCw, Download, UserPlus } from 'lucide-react';
 
 const SubjectTierCell = ({ value }: { value: SubjectTier | undefined }) => {
   const tier = value?.tier || '';
@@ -185,6 +185,13 @@ export default function StudentsList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate('/students/new')}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-lgs-red text-white rounded-lg hover:bg-lgs-red-dark transition-colors"
+          >
+            <UserPlus className="w-4 h-4" />
+            Add Student
+          </button>
           <button
             onClick={handleExport}
             disabled={isExporting}

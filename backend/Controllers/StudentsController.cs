@@ -11,6 +11,15 @@ namespace LgsImpact.Api.Controllers;
 [Authorize]
 public class StudentsController(ICosmosDbService cosmos, IAuditService audit, ITierCalculationService tierCalculation) : ControllerBase
 {
+    /// <summary>
+    /// Sources a hand-entered record may claim. "demographics" is in the upload set because it is a
+    /// file type, but it is roster data rather than an assessment result — a record carrying it
+    /// would store an assessment with no performance level any ruleset can score.
+    /// </summary>
+    internal static readonly string[] ManualAssessmentSources = UploadController.SupportedUploadTypes
+        .Where(t => !t.Equals("demographics", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+
     private int CurrentAdminId => int.Parse(User.FindFirstValue("adminId") ?? "0");
     private string CurrentAdminEmail => User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email) ?? "unknown";
 
@@ -48,6 +57,91 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         return Ok(student);
     }
 
+    /// <summary>
+    /// Creates a single student by hand, optionally with their assessment history, and runs the
+    /// tier engine over the result — the same normalization and the same engine an imported row
+    /// goes through, so a hand-entered student is tiered identically to an ingested one.
+    /// </summary>
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateStudentDto dto)
+    {
+        var name = dto.FullName?.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+            return BadRequest(new { message = "Full name is required." });
+
+        var stn = Blank(dto.Stn);
+        var dob = Blank(dto.Dob);
+        var localId = Blank(dto.LocalId);
+
+        // Same identity precedence the importer matches on (STN → localId → name+DOB), so a
+        // student who would have been matched by a later upload isn't created as a second record.
+        if (!dto.AllowDuplicate)
+        {
+            var clash = stn is not null ? await cosmos.FindStudentByStnAsync(stn) : null;
+            clash ??= localId is not null ? await cosmos.FindStudentByLocalIdAsync(localId) : null;
+            clash ??= dob is not null ? await cosmos.FindStudentByNameAndDobAsync(name, dob) : null;
+            if (clash is not null && clash.IsActive)
+                return Conflict(new
+                {
+                    message = $"{clash.FullName} already exists with a matching identifier. " +
+                              "Open that profile to add records, or resubmit with allowDuplicate to create a second record anyway.",
+                    studentId = clash.StudentId,
+                });
+        }
+
+        var records = dto.Records ?? new List<ManualAssessmentDto>();
+        foreach (var record in records)
+        {
+            var problem = ManualAssessmentFactory.Validate(record.ToInput(), ManualAssessmentSources);
+            if (problem is not null) return BadRequest(new { message = problem });
+        }
+
+        var studentId = $"s-{Guid.NewGuid():N}";
+        var student = new StudentDocument
+        {
+            Id          = studentId,
+            StudentId   = studentId,
+            FullName    = name,
+            Dob         = dob,
+            Stn         = stn,
+            LocalId     = localId,
+            ClassGroup  = Blank(dto.ClassGroup) ?? "Unassigned",
+            Grade       = Blank(dto.Grade)?.TrimStart('0'),
+            Gender      = Blank(dto.Gender),
+            Ethnicity   = Blank(dto.Ethnicity),
+            EllStatus   = Blank(dto.EllStatus),
+            SpedStatus  = Blank(dto.SpedStatus),
+            Section504  = Blank(dto.Section504),
+            HomeRoom    = Blank(dto.HomeRoom),
+            EntryDate   = Blank(dto.EntryDate),
+            ExitDate    = Blank(dto.ExitDate),
+            LunchStatus = Blank(dto.LunchStatus),
+            ZipCode     = Blank(dto.ZipCode),
+            SourceFile  = ManualAssessmentFactory.SourceLabel,
+            EnrolDate   = DateTime.UtcNow.ToString("o"),
+            LastUpdated = DateTime.UtcNow.ToString("o"),
+        };
+        await cosmos.UpsertStudentAsync(student);
+
+        foreach (var record in records)
+            await cosmos.CreateAssessmentAsync(
+                ManualAssessmentFactory.Build(studentId, record.ToInput(), CurrentAdminEmail));
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Edit, entityType: "Student", entityId: studentId,
+            details: $"Created student by hand: {name}" +
+                     (records.Count > 0 ? $" with {records.Count} assessment record(s)" : "") +
+                     (stn is not null ? $" | STN {stn}" : ""),
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        // Run the engine even with no records: that produces the Pending state and the
+        // "no_assessments" reason the profile explains, rather than a blank tier with no reasoning.
+        await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);
+
+        var created = await cosmos.GetStudentAsync(studentId) ?? student;
+        return CreatedAtAction(nameof(Get), new { id = studentId }, created);
+    }
+
     // Demographics-only. Tier overrides go through PUT /api/students/{id}/tier/{subject} —
     // there is no combined tier to set here (TR-011, AC-08).
     [HttpPatch("{id}")]
@@ -58,12 +152,27 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
 
         var changed = new List<string>();
         var oldClassGroup = student.ClassGroup;
+        if (dto.FullName is not null)
+        {
+            var name = dto.FullName.Trim();
+            if (name.Length == 0) return BadRequest(new { message = "Full name cannot be blank." });
+            student.FullName = name; changed.Add($"Name→{name}");
+        }
         if (dto.ClassGroup is not null) { student.ClassGroup = dto.ClassGroup; changed.Add($"ClassGroup→{dto.ClassGroup}"); }
         if (dto.Grade is not null) { student.Grade = dto.Grade; changed.Add($"Grade→{dto.Grade}"); }
         if (dto.HomeRoom is not null) { student.HomeRoom = dto.HomeRoom; changed.Add($"HomeRoom→{dto.HomeRoom}"); }
         if (dto.Stn is not null) { student.Stn = dto.Stn; changed.Add($"STN→{dto.Stn}"); }
         if (dto.LocalId is not null) { student.LocalId = dto.LocalId; changed.Add($"LocalId→{dto.LocalId}"); }
         if (dto.Dob is not null) { student.Dob = dto.Dob; changed.Add($"DOB→{dto.Dob}"); }
+        if (dto.Gender is not null) { student.Gender = dto.Gender; changed.Add($"Gender→{dto.Gender}"); }
+        if (dto.Ethnicity is not null) { student.Ethnicity = dto.Ethnicity; changed.Add($"Ethnicity→{dto.Ethnicity}"); }
+        if (dto.EllStatus is not null) { student.EllStatus = dto.EllStatus; changed.Add($"ELL→{dto.EllStatus}"); }
+        if (dto.SpedStatus is not null) { student.SpedStatus = dto.SpedStatus; changed.Add($"SPED→{dto.SpedStatus}"); }
+        if (dto.Section504 is not null) { student.Section504 = dto.Section504; changed.Add($"504→{dto.Section504}"); }
+        if (dto.LunchStatus is not null) { student.LunchStatus = dto.LunchStatus; changed.Add($"Lunch→{dto.LunchStatus}"); }
+        if (dto.ZipCode is not null) { student.ZipCode = dto.ZipCode; changed.Add($"Zip→{dto.ZipCode}"); }
+        if (dto.EntryDate is not null) { student.EntryDate = dto.EntryDate; changed.Add($"EntryDate→{dto.EntryDate}"); }
+        if (dto.ExitDate is not null) { student.ExitDate = dto.ExitDate; changed.Add($"ExitDate→{dto.ExitDate}"); }
         student.LastUpdated = DateTime.UtcNow.ToString("o");
 
         // classGroup is the Cosmos partition key — changing it without deleting the old
@@ -158,6 +267,99 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         student = (await cosmos.GetStudentAsync(id))!;
         return Ok(student);
     }
+
+    // ─── Hand-entered assessment records ──────────────────────────────────────
+    //
+    // Every one of the three writes below re-runs the tier engine for the student, because a record
+    // that changes the evidence without changing the recommendation on screen is worse than no
+    // record at all — staff would act on a tier that no longer reflects the data they just entered.
+    // Per-subject override gating lives inside the engine, so a subject an admin has overridden
+    // keeps its tier while the other subject still updates.
+
+    [HttpPost("{id}/assessments")]
+    public async Task<IActionResult> CreateAssessment(string id, [FromBody] ManualAssessmentDto dto)
+    {
+        var student = await cosmos.GetStudentAsync(id);
+        if (student is null || !student.IsActive) return NotFound();
+
+        var problem = ManualAssessmentFactory.Validate(dto.ToInput(), ManualAssessmentSources);
+        if (problem is not null) return BadRequest(new { message = problem });
+
+        var assessment = ManualAssessmentFactory.Build(student.StudentId, dto.ToInput(), CurrentAdminEmail);
+        await cosmos.CreateAssessmentAsync(assessment);
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Edit, entityType: "Assessment", entityId: student.StudentId,
+            details: $"Added assessment record by hand for {student.FullName}: {Describe(assessment)}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);
+
+        return Ok(new { assessment, student = await cosmos.GetStudentAsync(id) ?? student });
+    }
+
+    [HttpPut("{id}/assessments/{assessmentId}")]
+    public async Task<IActionResult> UpdateAssessment(string id, string assessmentId, [FromBody] ManualAssessmentDto dto)
+    {
+        var student = await cosmos.GetStudentAsync(id);
+        if (student is null || !student.IsActive) return NotFound();
+
+        var assessment = await cosmos.GetAssessmentAsync(student.StudentId, assessmentId);
+        if (assessment is null) return NotFound();
+
+        var problem = ManualAssessmentFactory.Validate(dto.ToInput(), ManualAssessmentSources);
+        if (problem is not null) return BadRequest(new { message = problem });
+
+        var before = Describe(assessment);
+        // Imported records are editable too — a wrong performance level in a source export is the
+        // most common reason staff need to correct one. The edit is normalized and audited the same
+        // way either way; what it loses is the tie to its source file, so the record is re-stamped
+        // as hand-entered rather than continuing to claim it came from that CSV.
+        var wasImported = assessment.FileName != ManualAssessmentFactory.SourceLabel;
+        ManualAssessmentFactory.Apply(assessment, dto.ToInput(), CurrentAdminEmail);
+        if (wasImported) assessment.FileName = ManualAssessmentFactory.SourceLabel;
+        assessment.UploadedAt = DateTime.UtcNow.ToString("o");
+        await cosmos.UpsertAssessmentAsync(assessment);
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Edit, entityType: "Assessment", entityId: student.StudentId,
+            details: $"Edited assessment record for {student.FullName}: {before} → {Describe(assessment)}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);
+
+        return Ok(new { assessment, student = await cosmos.GetStudentAsync(id) ?? student });
+    }
+
+    [HttpDelete("{id}/assessments/{assessmentId}")]
+    public async Task<IActionResult> DeleteAssessment(string id, string assessmentId)
+    {
+        var student = await cosmos.GetStudentAsync(id);
+        if (student is null || !student.IsActive) return NotFound();
+
+        var assessment = await cosmos.GetAssessmentAsync(student.StudentId, assessmentId);
+        if (assessment is null) return NotFound();
+
+        await cosmos.DeleteAssessmentAsync(student.StudentId, assessmentId);
+
+        await audit.LogAsync(CurrentAdminId, CurrentAdminEmail,
+            AuditEventType.Delete, entityType: "Assessment", entityId: student.StudentId,
+            details: $"Deleted assessment record for {student.FullName}: {Describe(assessment)}",
+            ip: HttpContext.Connection.RemoteIpAddress?.ToString());
+
+        await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);
+
+        return Ok(new { student = await cosmos.GetStudentAsync(id) ?? student });
+    }
+
+    private static string Describe(Models.AssessmentDocument a) =>
+        $"{a.UploadType} {a.Subject} {a.Period ?? "no period"} " +
+        $"\"{a.Proficiency ?? "no level"}\"" +
+        (a.Score is not null ? $" score {a.Score}" : "") +
+        (a.DateIso is not null ? $" on {a.DateIso}" : "");
+
+    private static string? Blank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // BRD ST-21 / NF-AUD-1: per-student audit log — accessible to all admins (not super-admin-only)
     [HttpGet("{id}/audit")]
@@ -305,6 +507,30 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
     }
 }
 
-public record StudentUpdateDto(string? ClassGroup, string? Grade, string? HomeRoom, string? Stn, string? LocalId, string? Dob);
+// Every field is nullable and only applied when present, so a partial PATCH cannot blank out a
+// column the client didn't send.
+public record StudentUpdateDto(
+    string? ClassGroup, string? Grade, string? HomeRoom, string? Stn, string? LocalId, string? Dob,
+    string? FullName = null, string? Gender = null, string? Ethnicity = null, string? EllStatus = null,
+    string? SpedStatus = null, string? Section504 = null, string? LunchStatus = null,
+    string? ZipCode = null, string? EntryDate = null, string? ExitDate = null);
+
+public record CreateStudentDto(
+    string? FullName, string? Dob = null, string? Stn = null, string? LocalId = null,
+    string? ClassGroup = null, string? Grade = null, string? Gender = null, string? Ethnicity = null,
+    string? EllStatus = null, string? SpedStatus = null, string? Section504 = null,
+    string? HomeRoom = null, string? EntryDate = null, string? ExitDate = null,
+    string? LunchStatus = null, string? ZipCode = null,
+    List<ManualAssessmentDto>? Records = null,
+    /// <summary>Set after the caller has seen the conflict response and chosen to proceed.</summary>
+    bool AllowDuplicate = false);
+
+public record ManualAssessmentDto(
+    string? UploadType, string? Subject = null, string? Period = null,
+    double? Score = null, string? Proficiency = null, string? Date = null)
+{
+    public ManualAssessmentInput ToInput() =>
+        new(UploadType ?? "", Subject, Period, Score, Proficiency, Date);
+}
 public record SetSubjectTierDto(string? Tier, string? Status, string? Note);
 public record CreateNoteDto(string Text);
