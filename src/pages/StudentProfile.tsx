@@ -257,6 +257,16 @@ export default function StudentProfile() {
   // G1 – Audit Trail
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  // Entries that arrived from the most recent action, highlighted briefly so a change is visible
+  // without reading timestamps.
+  const [newAuditIds, setNewAuditIds] = useState<Set<string>>(new Set());
+  // Mirrors auditEntries for refreshAudit: it runs inside handlers that captured an older render,
+  // and diffing against that stale list would mark every entry as new.
+  const auditEntriesRef = useRef<AuditEntry[]>([]);
+  auditEntriesRef.current = auditEntries;
+  // Opening a profile writes a "Profile Viewed" entry, so on a student anyone has looked at more
+  // than once the views outnumber the changes and bury them. Hidden by default, one click away.
+  const [showAuditViews, setShowAuditViews] = useState(false);
 
   // G2 – Collaboration Notes
   const [notes, setNotes] = useState<CollaborationNote[]>([]);
@@ -272,6 +282,12 @@ export default function StudentProfile() {
   useEffect(() => {
     configApi.getTierRules().then(setTierRuleset).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (newAuditIds.size === 0) return;
+    const timer = setTimeout(() => setNewAuditIds(new Set()), 6000);
+    return () => clearTimeout(timer);
+  }, [newAuditIds]);
 
   // BRD ST-16 – Generate Recommendation
   const [isGeneratingRec, setIsGeneratingRec] = useState(false);
@@ -313,6 +329,7 @@ export default function StudentProfile() {
       const note = await notesApi.create(studentId, noteText.trim());
       setNotes(prev => [note, ...prev]);
       setNoteText('');
+      await refreshAudit();
     } catch (e: any) {
       alert('Failed to save note: ' + e.message);
     } finally {
@@ -325,6 +342,7 @@ export default function StudentProfile() {
     try {
       await notesApi.delete(studentId, noteId);
       setNotes(prev => prev.filter(n => n.id !== noteId));
+      await refreshAudit();
     } catch (e: any) {
       alert('Failed to delete note: ' + e.message);
     }
@@ -347,6 +365,7 @@ export default function StudentProfile() {
       const updated = await studentsApi.setSubjectTier(studentId, subject, { tier: value, status: 'Admin Override' });
       setStudent(updated);
       if (subject === 'ela') setOverrideTierEla(''); else setOverrideTierMath('');
+      await refreshAudit();
     } catch (e: any) {
       alert('Failed to save tier: ' + e.message);
     } finally {
@@ -359,9 +378,7 @@ export default function StudentProfile() {
     try {
       const updated = await studentsApi.recalculateTier(studentId);
       setStudent(updated);
-      // Refresh audit trail to show the new recommendation entry
-      const auditResult = await studentAuditApi.list(studentId).catch(() => ({ items: [], total: 0, page: 1, pageSize: 50 }));
-      setAuditEntries(auditResult.items);
+      await refreshAudit();
     } catch (e: any) {
       alert(e.message || 'Tier calculation failed.');
     } finally {
@@ -388,9 +405,7 @@ export default function StudentProfile() {
       const updated = await studentsApi.update(studentId, changes as any);
       setStudent(updated);
       setEditForm(null);
-      const auditResult = await studentAuditApi.list(studentId)
-        .catch(() => ({ items: [], total: 0, page: 1, pageSize: 50 }));
-      setAuditEntries(auditResult.items);
+      await refreshAudit();
     } catch (e: any) {
       alert('Failed to save: ' + e.message);
     } finally {
@@ -433,15 +448,43 @@ export default function StudentProfile() {
     }
   }
 
-  // The record list and the audit trail both change on every record write; the tier comes back on
-  // the write response itself, so it is never re-fetched here.
+  // Every write on this page lands in the audit trail, so every handler ends by calling this —
+  // previously each one re-fetched inline (or, for tier overrides, AI summaries and notes, not at
+  // all), so the trail silently disagreed with the page above it until a reload.
+  //
+  // The re-fetch retries briefly. Audit logs are partitioned by admin email, so reading one back
+  // by student is a cross-partition query and does not reliably see a write that completed moments
+  // earlier: a single immediate fetch returned the pre-write list, and the entry only surfaced on
+  // whatever the user did next. That looked exactly like "the trail doesn't refresh".
+  async function refreshAudit(expectChange = true) {
+    const before = new Set(auditEntriesRef.current.map(e => e.id));
+    const delays = [0, 400, 800, 1200];
+
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt]) await new Promise(r => setTimeout(r, delays[attempt]));
+
+      const result = await studentAuditApi.list(studentId)
+        .catch(() => ({ items: [] as AuditEntry[], total: 0, page: 1, pageSize: 50 }));
+      const arrived = result.items.filter(e => !before.has(e.id));
+
+      // Keep waiting only while a change is expected and none has landed; on the last attempt
+      // take whatever the server has rather than leaving the panel stale.
+      if (!expectChange || arrived.length > 0 || attempt === delays.length - 1) {
+        setAuditEntries(result.items);
+        // Anything that wasn't in the list before the action is what the user just did — flagged
+        // so the panel points at it instead of leaving them to scan identical-looking rows.
+        if (arrived.length) setNewAuditIds(new Set(arrived.map(e => e.id)));
+        return;
+      }
+    }
+  }
+
+  // The record list changes on every record write too; the tier comes back on the write response
+  // itself, so it is never re-fetched here.
   async function refreshRecordsAndAudit() {
-    const [records, auditResult] = await Promise.all([
-      assessmentsApi.byStudent(studentId).catch(() => assessments),
-      studentAuditApi.list(studentId).catch(() => ({ items: [], total: 0, page: 1, pageSize: 50 })),
-    ]);
+    const records = await assessmentsApi.byStudent(studentId).catch(() => assessments);
     setAssessments(records);
-    setAuditEntries(auditResult.items);
+    await refreshAudit();
   }
 
   async function handleGenerateAI() {
@@ -449,6 +492,7 @@ export default function StudentProfile() {
     try {
       const summary = await aiApi.generate(studentId);
       setAiSummary(summary);
+      await refreshAudit();
     } catch (e: any) {
       alert(e.message || 'AI summary generation failed.');
     } finally {
@@ -478,6 +522,15 @@ export default function StudentProfile() {
         : 0;
     });
   }, [assessments, assessmentSortConfig]);
+
+  // "Profile Viewed" is written on every page load, including this one, so it is separated from
+  // the entries that record an actual change rather than listed alongside them.
+  const changeEntries = useMemo(
+    () => auditEntries.filter(e => e.eventType !== 'View'), [auditEntries]);
+  const viewCount = auditEntries.length - changeEntries.length;
+  const changeCount = changeEntries.length;
+  const lastChangeAt = changeEntries[0] ? formatAuditTimestamp(changeEntries[0].timestamp) : null;
+  const visibleAuditEntries = showAuditViews ? auditEntries : changeEntries;
 
   function requestSort(key: string) {
     setAssessmentSortConfig(prev =>
@@ -932,6 +985,59 @@ export default function StudentProfile() {
             ))}
           </div>
 
+          {/* G1 – Audit Trail (BRD ST-21) */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <div className="flex items-start justify-between gap-3 mb-1">
+              <h2 className="text-lg font-semibold text-lgs-blue flex items-center gap-2">
+                <Clock className="w-5 h-5 text-lgs-red" />
+                Audit Trail
+              </h2>
+              {viewCount > 0 && (
+                <button
+                  onClick={() => setShowAuditViews(v => !v)}
+                  className="shrink-0 text-xs text-slate-400 hover:text-lgs-blue underline decoration-dotted"
+                >
+                  {showAuditViews ? 'Hide' : 'Show'} {viewCount} view{viewCount === 1 ? '' : 's'}
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-slate-400 mb-3">
+              {changeCount === 0
+                ? 'No changes recorded yet.'
+                : `${changeCount} change${changeCount === 1 ? '' : 's'}${lastChangeAt ? ` · latest ${lastChangeAt}` : ''}`}
+            </p>
+            {visibleAuditEntries.length === 0 ? (
+              <p className="text-slate-500 text-sm">No audit events recorded yet.</p>
+            ) : (
+              <ul className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                {visibleAuditEntries.map(e => {
+                  const isNew = newAuditIds.has(e.id);
+                  return (
+                    <li
+                      key={e.id}
+                      className={`text-xs border-b border-slate-100 pb-2 last:border-0 last:pb-0 ${
+                        isNew ? 'bg-amber-50 -mx-2 px-2 py-1.5 rounded-lg border-b-0' : ''
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-slate-800">
+                          {AUDIT_EVENT_LABELS[e.eventType] ?? e.eventType}
+                        </span>
+                        {isNew && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-900 text-[10px] font-semibold uppercase tracking-wide">
+                            Just now
+                          </span>
+                        )}
+                        <span className="text-slate-400">{formatAuditTimestamp(e.timestamp)}</span>
+                      </div>
+                      <p className="text-slate-500 mt-0.5">{e.adminEmail}</p>
+                      {e.details && <p className="text-slate-600 mt-0.5 leading-snug">{e.details}</p>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
           {/* Learning Plans stub - local state only (future: dedicated API endpoint) */}
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <div className="flex justify-between items-center mb-4">
@@ -960,31 +1066,6 @@ export default function StudentProfile() {
             <p className="text-slate-500 text-sm">Learning plans are stored locally in this session. A dedicated API endpoint will persist them in a future release.</p>
           </div>
 
-          {/* G1 – Audit Trail (BRD ST-21) */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <h2 className="text-lg font-semibold text-lgs-blue mb-4 flex items-center gap-2">
-              <Clock className="w-5 h-5 text-lgs-red" />
-              Audit Trail
-            </h2>
-            {auditEntries.length === 0 ? (
-              <p className="text-slate-500 text-sm">No audit events recorded yet.</p>
-            ) : (
-              <ul className="space-y-2 max-h-64 overflow-y-auto">
-                {auditEntries.map(e => (
-                  <li key={e.id} className="text-xs border-b border-slate-100 pb-2 last:border-0 last:pb-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-slate-800">
-                        {AUDIT_EVENT_LABELS[e.eventType] ?? e.eventType}
-                      </span>
-                      <span className="text-slate-400">{formatAuditTimestamp(e.timestamp)}</span>
-                    </div>
-                    <p className="text-slate-500 mt-0.5">{e.adminEmail}</p>
-                    {e.details && <p className="text-slate-600 mt-0.5 leading-snug">{e.details}</p>}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
         </div>
       </div>
 
