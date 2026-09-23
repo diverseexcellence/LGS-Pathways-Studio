@@ -23,7 +23,6 @@ const SubjectTierCell = ({ value }: { value: SubjectTier | undefined }) => {
   return (
     <span className="inline-flex items-center gap-1.5" title={pendingTitle}>
       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{tier || 'Pending'}</span>
-      {value?.score != null && value.status !== 'Pending' && <span className="text-xs text-slate-400">{value.score.toFixed(2)}</span>}
     </span>
   );
 };

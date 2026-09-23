@@ -608,19 +608,19 @@ export default function StudentProfile() {
       {/* ── Hero Card ─────────────────────────────────────────────────────── */}
       <div className={`bg-white rounded-xl shadow-sm border border-slate-200 border-t-4 ${tierAccent} overflow-hidden`}>
         {/* Top bar: name + tier badge */}
-        <div className="px-6 pt-6 pb-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-          <div className="flex items-center gap-4">
+        <div className="px-4 pt-5 pb-4 sm:px-6 sm:pt-6 flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-center gap-4 min-w-0">
             {/* Avatar circle */}
             <div className="w-14 h-14 rounded-full bg-lgs-blue flex items-center justify-center shrink-0 shadow-sm">
               <span className="text-white text-xl font-bold select-none">
                 {student.fullName?.trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase()}
               </span>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-lgs-blue leading-tight">
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold text-lgs-blue leading-tight break-words">
                 {formatDisplayName(student.fullName)}
               </h1>
-              <div className="flex flex-wrap items-center gap-2 mt-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
                 {student.stn && (
                   <span className="text-xs text-slate-500 font-mono bg-slate-100 px-2 py-0.5 rounded">
                     STN {student.stn}
@@ -639,22 +639,30 @@ export default function StudentProfile() {
             </div>
           </div>
 
-          {/* Two independent subject tier badges — no combined overall tier (TR-011) */}
-          <div className="shrink-0 flex flex-col sm:flex-row gap-4">
+          {/* Two independent subject tier badges — no combined overall tier (TR-011).
+              Equal columns, centered, so the label, pill, and caption share one axis
+              and the caption wraps instead of running out of the card. */}
+          <div className="grid grid-cols-2 gap-3 sm:gap-6 w-full lg:w-auto">
             {([['ELA', student.elaTier], ['Math', student.mathTier]] as const).map(([label, t]) => (
-              <div key={label} className="text-right">
+              <div key={label} className="flex flex-col items-center text-center min-w-0">
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">{label}</p>
-                <span className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border-2 ${tierBadgeColor(t?.tier, t?.status)}`}>
-                  {isAdminOverride(t?.status) && <Pencil className="w-3.5 h-3.5" />}
+                <span className={`inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold border-2 whitespace-nowrap ${tierBadgeColor(t?.tier, t?.status)}`}>
+                  {isAdminOverride(t?.status) && <Pencil className="w-3.5 h-3.5 shrink-0" />}
                   {t?.tier || 'Pending'}
                 </span>
                 {t?.status && t.status !== 'Pending' && (
-                  <p className="text-xs text-slate-400 mt-1">
-                    {isAdminOverride(t.status) ? 'Admin Override' : t.status}{t.score != null ? ` · score ${t.score.toFixed(2)} · from ${t.dataPoints} assessment${t.dataPoints === 1 ? '' : 's'}` : ''}
+                  <p className="text-xs text-slate-400 mt-1.5 leading-snug max-w-[11rem]">
+                    {isAdminOverride(t.status) ? 'Admin Override' : t.status}
+                    {t.score != null && (
+                      <>
+                        <br />
+                        score {t.score.toFixed(2)} · {t.dataPoints} assessment{t.dataPoints === 1 ? '' : 's'}
+                      </>
+                    )}
                   </p>
                 )}
                 {t?.status === 'Pending' && (
-                  <p className="text-xs text-amber-600 mt-0.5 max-w-[180px]">{pendingReasonText(t.pendingReason)}</p>
+                  <p className="text-xs text-amber-600 mt-1.5 leading-snug max-w-[11rem]">{pendingReasonText(t.pendingReason)}</p>
                 )}
               </div>
             ))}
@@ -662,10 +670,10 @@ export default function StudentProfile() {
         </div>
 
         {/* Divider */}
-        <div className="border-t border-slate-100 mx-6" />
+        <div className="border-t border-slate-100 mx-4 sm:mx-6" />
 
         {/* Demographic grid */}
-        <div className="px-6 py-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-6 gap-y-4 text-sm">
+        <div className="px-4 sm:px-6 py-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-x-4 sm:gap-x-6 gap-y-4 text-sm">
           {[
             { label: 'Date of Birth', value: formatUsDate(student.dob) },
             { label: 'Age', value: String(calculateAge(student.dob)) },
@@ -684,7 +692,7 @@ export default function StudentProfile() {
         </div>
 
         {/* Footer: source line + entry/exit + demographics link (BRD §8.3.2) */}
-        <div className="px-6 pb-4 flex flex-wrap items-center gap-4 text-xs text-slate-400">
+        <div className="px-4 sm:px-6 pb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-400">
           {student.sourceFile && (
             <span>Source: <span className="text-slate-600 font-mono">{student.sourceFile}</span></span>
           )}
