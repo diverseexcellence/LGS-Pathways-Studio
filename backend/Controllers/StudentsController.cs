@@ -109,6 +109,8 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
             Grade       = Blank(dto.Grade)?.TrimStart('0'),
             Gender      = Blank(dto.Gender),
             Ethnicity   = Blank(dto.Ethnicity),
+            Race        = Blank(dto.Race),
+            IsActive    = dto.IsActive ?? true,
             EllStatus   = Blank(dto.EllStatus),
             SpedStatus  = Blank(dto.SpedStatus),
             Section504  = Blank(dto.Section504),
@@ -166,6 +168,8 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
         if (dto.Dob is not null) { student.Dob = dto.Dob; changed.Add($"DOB→{dto.Dob}"); }
         if (dto.Gender is not null) { student.Gender = dto.Gender; changed.Add($"Gender→{dto.Gender}"); }
         if (dto.Ethnicity is not null) { student.Ethnicity = dto.Ethnicity; changed.Add($"Ethnicity→{dto.Ethnicity}"); }
+        if (dto.Race is not null) { student.Race = dto.Race; changed.Add($"Race→{dto.Race}"); }
+        if (dto.IsActive is not null) { student.IsActive = dto.IsActive.Value; changed.Add($"Active→{dto.IsActive}"); }
         if (dto.EllStatus is not null) { student.EllStatus = dto.EllStatus; changed.Add($"ELL→{dto.EllStatus}"); }
         if (dto.SpedStatus is not null) { student.SpedStatus = dto.SpedStatus; changed.Add($"SPED→{dto.SpedStatus}"); }
         if (dto.Section504 is not null) { student.Section504 = dto.Section504; changed.Add($"504→{dto.Section504}"); }
@@ -513,7 +517,8 @@ public record StudentUpdateDto(
     string? ClassGroup, string? Grade, string? HomeRoom, string? Stn, string? LocalId, string? Dob,
     string? FullName = null, string? Gender = null, string? Ethnicity = null, string? EllStatus = null,
     string? SpedStatus = null, string? Section504 = null, string? LunchStatus = null,
-    string? ZipCode = null, string? EntryDate = null, string? ExitDate = null);
+    string? ZipCode = null, string? EntryDate = null, string? ExitDate = null,
+    string? Race = null, bool? IsActive = null);
 
 public record CreateStudentDto(
     string? FullName, string? Dob = null, string? Stn = null, string? LocalId = null,
@@ -523,7 +528,9 @@ public record CreateStudentDto(
     string? LunchStatus = null, string? ZipCode = null,
     List<ManualAssessmentDto>? Records = null,
     /// <summary>Set after the caller has seen the conflict response and chosen to proceed.</summary>
-    bool AllowDuplicate = false);
+    bool AllowDuplicate = false,
+    string? Race = null,
+    bool? IsActive = null);
 
 public record ManualAssessmentDto(
     string? UploadType, string? Subject = null, string? Period = null,

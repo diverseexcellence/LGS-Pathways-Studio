@@ -3,21 +3,27 @@ import { useNavigate } from 'react-router-dom';
 import { UserPlus, Plus, Sparkles, AlertTriangle } from 'lucide-react';
 import { studentsApi, configApi, AssessmentInput, StudentInput, TierRuleset } from '../lib/api';
 import AssessmentRecordFields, { EMPTY_RECORD } from '../components/AssessmentRecordFields';
+import {
+  ELL_OPTIONS, ENROLLMENT_OPTIONS, ETHNICITY_OPTIONS, GENDER_OPTIONS, LUNCH_OPTIONS,
+  RACE_OPTIONS, TRUE_FALSE_OPTIONS, CodedOption,
+} from '../lib/demographics';
 
 const inputClass =
   'w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none';
 
-const YES_NO = [
-  { value: '', label: 'Not recorded' },
-  { value: 'Yes', label: 'Yes' },
-  { value: 'No', label: 'No' },
-];
-
 const EMPTY_FORM: StudentInput = {
   fullName: '', dob: '', stn: '', localId: '', classGroup: '', grade: '', gender: '',
-  ethnicity: '', ellStatus: '', spedStatus: '', section504: '', homeRoom: '',
+  ethnicity: '', race: '', ellStatus: '', spedStatus: '', section504: '', homeRoom: '',
   entryDate: '', exitDate: '', lunchStatus: '', zipCode: '',
 };
+
+function CodeSelect({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: CodedOption[] }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={inputClass}>
+      {options.map(o => <option key={o.value || 'blank'} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -40,6 +46,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 export default function StudentNew() {
   const navigate = useNavigate();
   const [form, setForm] = useState<StudentInput>(EMPTY_FORM);
+  const [enrollment, setEnrollment] = useState('Enrolled');
   const [records, setRecords] = useState<AssessmentInput[]>([]);
   const [ruleset, setRuleset] = useState<TierRuleset | null>(null);
   const [saving, setSaving] = useState(false);
@@ -69,7 +76,12 @@ export default function StudentNew() {
     setSaving(true);
     setError('');
     try {
-      const created = await studentsApi.create({ ...form, records, allowDuplicate });
+      const created = await studentsApi.create({
+        ...form,
+        records,
+        allowDuplicate,
+        isActive: enrollment === 'Enrolled',
+      });
       navigate(`/students/${created.studentId}`);
     } catch (e: any) {
       // A matching identifier is a prompt, not a dead end — the message names the existing student
@@ -122,11 +134,14 @@ export default function StudentNew() {
           <Field label="Date of Birth">
             <input type="date" value={form.dob ?? ''} onChange={e => set({ dob: e.target.value })} className={inputClass} />
           </Field>
-          <Field label="Gender">
-            <input value={form.gender ?? ''} onChange={e => set({ gender: e.target.value })} className={inputClass} />
+          <Field label="Gender" hint="(U / F / M)">
+            <CodeSelect value={form.gender ?? ''} onChange={gender => set({ gender })} options={GENDER_OPTIONS} />
           </Field>
-          <Field label="Ethnicity">
-            <input value={form.ethnicity ?? ''} onChange={e => set({ ethnicity: e.target.value })} className={inputClass} />
+          <Field label="Ethnicity" hint="(Y / N)">
+            <CodeSelect value={form.ethnicity ?? ''} onChange={ethnicity => set({ ethnicity })} options={ETHNICITY_OPTIONS} />
+          </Field>
+          <Field label="Race">
+            <CodeSelect value={form.race ?? ''} onChange={race => set({ race })} options={RACE_OPTIONS} />
           </Field>
         </div>
         <p className="text-xs text-slate-400 mt-3">
@@ -157,6 +172,9 @@ export default function StudentNew() {
           <Field label="ZIP Code">
             <input value={form.zipCode ?? ''} onChange={e => set({ zipCode: e.target.value })} className={inputClass} />
           </Field>
+          <Field label="Enrollment Status">
+            <CodeSelect value={enrollment} onChange={setEnrollment} options={ENROLLMENT_OPTIONS} />
+          </Field>
         </div>
       </div>
 
@@ -164,23 +182,17 @@ export default function StudentNew() {
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
         <h2 className="text-lg font-semibold text-lgs-blue mb-4">Program &amp; Support Indicators</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Field label="EL Status">
-            <select value={form.ellStatus ?? ''} onChange={e => set({ ellStatus: e.target.value })} className={inputClass}>
-              {YES_NO.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+          <Field label="EL / ELL Status" hint="(Y / N)">
+            <CodeSelect value={form.ellStatus ?? ''} onChange={ellStatus => set({ ellStatus })} options={ELL_OPTIONS} />
           </Field>
-          <Field label="Special Education">
-            <select value={form.spedStatus ?? ''} onChange={e => set({ spedStatus: e.target.value })} className={inputClass}>
-              {YES_NO.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+          <Field label="Special Education" hint="(T / F)">
+            <CodeSelect value={form.spedStatus ?? ''} onChange={spedStatus => set({ spedStatus })} options={TRUE_FALSE_OPTIONS} />
           </Field>
-          <Field label="504 Plan">
-            <select value={form.section504 ?? ''} onChange={e => set({ section504: e.target.value })} className={inputClass}>
-              {YES_NO.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+          <Field label="504 Status" hint="(T / F)">
+            <CodeSelect value={form.section504 ?? ''} onChange={section504 => set({ section504 })} options={TRUE_FALSE_OPTIONS} />
           </Field>
           <Field label="Lunch Status">
-            <input value={form.lunchStatus ?? ''} onChange={e => set({ lunchStatus: e.target.value })} className={inputClass} />
+            <CodeSelect value={form.lunchStatus ?? ''} onChange={lunchStatus => set({ lunchStatus })} options={LUNCH_OPTIONS} />
           </Field>
         </div>
       </div>

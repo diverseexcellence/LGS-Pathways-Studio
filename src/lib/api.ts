@@ -95,6 +95,7 @@ export interface Student {
   grade?: string;
   gender?: string;
   ethnicity?: string;
+  race?: string;
   ellStatus?: string;
   spedStatus?: string;
   section504?: string;
@@ -167,6 +168,8 @@ export interface StudentInput {
   grade?: string | null;
   gender?: string | null;
   ethnicity?: string | null;
+  race?: string | null;
+  isActive?: boolean;
   ellStatus?: string | null;
   spedStatus?: string | null;
   section504?: string | null;

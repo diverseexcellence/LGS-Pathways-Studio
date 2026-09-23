@@ -32,6 +32,10 @@ public class StudentDocument
     [JsonProperty("ethnicity")]
     public string? Ethnicity { get; set; }
 
+    /// <summary>Federal race code (1, 2, 3, 5, 7). Separate from the Y/N ethnicity indicator.</summary>
+    [JsonProperty("race")]
+    public string? Race { get; set; }
+
     [JsonProperty("ellStatus")]
     public string? EllStatus { get; set; }
 

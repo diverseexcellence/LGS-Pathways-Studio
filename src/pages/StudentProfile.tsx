@@ -5,6 +5,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, configApi, Student, Assessment, AssessmentInput, AISummary, AuditEntry, CollaborationNote, TierRuleset } from '../lib/api';
 import { parseFlexibleDate, formatUsDate, formatUsDateTime } from '../lib/dates';
 import AssessmentRecordFields, { EMPTY_RECORD } from '../components/AssessmentRecordFields';
+import {
+  ELL_OPTIONS, ENROLLMENT_OPTIONS, ETHNICITY_OPTIONS, GENDER_OPTIONS, LUNCH_OPTIONS,
+  RACE_OPTIONS, TRUE_FALSE_OPTIONS, optionLabel, optionsWithCurrent,
+} from '../lib/demographics';
 
 const AUDIT_EVENT_LABELS: Record<string, string> = {
   TierRecommendation: 'Tier Recommendation',
@@ -30,6 +34,8 @@ function openEditValues(student: Student): Record<string, string> {
     homeRoom: student.homeRoom ?? '',
     gender: student.gender ?? '',
     ethnicity: student.ethnicity ?? '',
+    race: student.race ?? '',
+    enrollment: student.isActive === false ? 'Unenrolled' : 'Enrolled',
     ellStatus: student.ellStatus ?? '',
     spedStatus: student.spedStatus ?? '',
     section504: student.section504 ?? '',
@@ -201,7 +207,8 @@ function formatDisplayName(fullName: string) {
 function toYesNo(value: string | undefined, defaultVal = 'No') {
   if (!value || value.trim() === '' || value === 'N/A') return defaultVal;
   const v = value.trim().toLowerCase();
-  if (v === 'false' || v === '0' || v === 'no') return 'No';
+  // Source codes are Y/N for EL and ethnicity, and T/F for special education and 504.
+  if (v === 'false' || v === '0' || v === 'no' || v === 'n' || v === 'f') return 'No';
   return 'Yes';
 }
 
@@ -395,10 +402,14 @@ export default function StudentProfile() {
     if (!editForm.fullName.trim()) { alert('Full name cannot be blank.'); return; }
 
     const original = openEditValues(student);
-    const changes = Object.fromEntries(
+    const changes: Record<string, string | boolean> = Object.fromEntries(
       Object.entries(editForm).filter(([key, value]) => value !== original[key])
     );
     if (Object.keys(changes).length === 0) { setEditForm(null); return; }
+    if (typeof changes.enrollment === 'string') {
+      changes.isActive = changes.enrollment === 'Enrolled';
+      delete changes.enrollment;
+    }
 
     setIsSavingStudent(true);
     try {
@@ -678,11 +689,12 @@ export default function StudentProfile() {
             { label: 'Date of Birth', value: formatUsDate(student.dob) },
             { label: 'Age', value: String(calculateAge(student.dob)) },
             { label: 'Gender', value: student.gender || 'N/A' },
-            { label: 'Ethnicity', value: translateEthnicity(student.ethnicity) },
+            { label: 'Ethnicity', value: student.ethnicity === 'Y' || student.ethnicity === 'N' ? student.ethnicity : translateEthnicity(student.ethnicity) },
+            { label: 'Race', value: optionLabel(RACE_OPTIONS, student.race) || 'N/A' },
             { label: 'EL Status', value: toYesNo(student.ellStatus) },
             { label: 'Sp. Education', value: toYesNo(student.spedStatus) },
             { label: '504 Plan', value: toYesNo(student.section504, 'No') },
-            { label: 'Lunch', value: student.lunchStatus || 'N/A' },
+            { label: 'Lunch', value: optionLabel(LUNCH_OPTIONS, student.lunchStatus) || 'N/A' },
           ].map(({ label, value }) => (
             <div key={label}>
               <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-0.5">{label}</p>
@@ -1183,9 +1195,6 @@ export default function StudentProfile() {
                 ['grade', 'Grade', 'text'],
                 ['classGroup', 'Class Group', 'text'],
                 ['homeRoom', 'Homeroom', 'text'],
-                ['gender', 'Gender', 'text'],
-                ['ethnicity', 'Ethnicity', 'text'],
-                ['lunchStatus', 'Lunch Status', 'text'],
                 ['entryDate', 'Entry Date', 'date'],
                 ['exitDate', 'Exit Date', 'date'],
               ] as const).map(([key, label, type]) => (
@@ -1200,20 +1209,25 @@ export default function StudentProfile() {
                 </div>
               ))}
               {([
-                ['ellStatus', 'EL Status'],
-                ['spedStatus', 'Special Education'],
-                ['section504', '504 Plan'],
-              ] as const).map(([key, label]) => (
+                ['gender', 'Gender', GENDER_OPTIONS],
+                ['ethnicity', 'Ethnicity', ETHNICITY_OPTIONS],
+                ['race', 'Race', RACE_OPTIONS],
+                ['enrollment', 'Enrollment Status', ENROLLMENT_OPTIONS],
+                ['lunchStatus', 'Lunch Status', LUNCH_OPTIONS],
+                ['ellStatus', 'EL / ELL Status', ELL_OPTIONS],
+                ['spedStatus', 'Special Education', TRUE_FALSE_OPTIONS],
+                ['section504', '504 Status', TRUE_FALSE_OPTIONS],
+              ] as const).map(([key, label, options]) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
                   <select
                     value={editForm[key] ?? ''}
                     onChange={e => setEditForm(prev => (prev ? { ...prev, [key]: e.target.value } : prev))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none bg-white"
                   >
-                    <option value="">Not recorded</option>
-                    <option value="Yes">Yes</option>
-                    <option value="No">No</option>
+                    {optionsWithCurrent(options, editForm[key]).map(o => (
+                      <option key={o.value || 'blank'} value={o.value}>{o.label}</option>
+                    ))}
                   </select>
                 </div>
               ))}
@@ -1257,7 +1271,8 @@ export default function StudentProfile() {
                     ['Date of Birth', formatUsDate(student.dob)],
                     ['Age', String(calculateAge(student.dob))],
                     ['Gender', student.gender || 'N/A'],
-                    ['Ethnicity', translateEthnicity(student.ethnicity)],
+                    ['Ethnicity', student.ethnicity === 'Y' || student.ethnicity === 'N' ? student.ethnicity : translateEthnicity(student.ethnicity)],
+                    ['Race', optionLabel(RACE_OPTIONS, student.race) || 'N/A'],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span className="block text-xs text-slate-400 font-medium">{label}</span>
@@ -1280,6 +1295,7 @@ export default function StudentProfile() {
                     ['Entry Date', formatUsDate(student.entryDate)],
                     ['Exit Date', formatUsDate(student.exitDate)],
                     ['Enrolled', formatUsDate(student.enrolDate)],
+                    ['Enrollment Status', student.isActive === false ? 'Unenrolled' : 'Enrolled'],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span className="block text-xs text-slate-400 font-medium">{label}</span>
@@ -1298,7 +1314,7 @@ export default function StudentProfile() {
                   {[
                     ['Special Education', toYesNo(student.spedStatus)],
                     ['504 Plan', toYesNo(student.section504, 'No')],
-                    ['Lunch Status', student.lunchStatus || 'N/A'],
+                    ['Lunch Status', optionLabel(LUNCH_OPTIONS, student.lunchStatus) || 'N/A'],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span className="block text-xs text-slate-400 font-medium">{label}</span>
