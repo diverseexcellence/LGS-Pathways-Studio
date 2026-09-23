@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
-import { ColDef, GridReadyEvent, IGetRowsParams, GridApi } from 'ag-grid-community';
+import { ColDef, SortChangedEvent } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
 import { studentsApi, exportApi, Student, SubjectTier } from '../lib/api';
-import { Users, Search, RefreshCw, Download, UserPlus } from 'lucide-react';
+import { Users, Search, RefreshCw, Download, UserPlus, ChevronLeft, ChevronRight } from 'lucide-react';
+
+const PAGE_SIZES = [25, 50, 100];
 
 const SubjectTierCell = ({ value }: { value: SubjectTier | undefined }) => {
   const tier = value?.tier || '';
@@ -31,22 +33,39 @@ const StatusCell = ({ value }: { value: boolean }) => (
   <span className={`text-xs ${value ? 'text-green-600' : 'text-slate-400'}`}>{value ? 'Active' : 'Inactive'}</span>
 );
 
+function pageWindow(current: number, total: number): (number | 'gap')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages: (number | 'gap')[] = [1];
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  if (start > 2) pages.push('gap');
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (end < total - 1) pages.push('gap');
+  pages.push(total);
+  return pages;
+}
+
 export default function StudentsList() {
   const navigate = useNavigate();
-  const gridRef = useRef<AgGridReact<Student>>(null);
-  const [gridApi, setGridApi] = useState<GridApi | null>(null);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [students, setStudents] = useState<Student[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
-  const searchRef = useRef(search);
-  searchRef.current = search;
+  const [sortBy, setSortBy] = useState<string | undefined>();
+  const [sortDir, setSortDir] = useState<'asc' | 'desc' | undefined>();
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [isExporting, setIsExporting] = useState(false);
 
   const columnDefs: ColDef<Student>[] = [
     {
       field: 'fullName',
       headerName: 'Name',
       sortable: true,
-      filter: true,
+      comparator: () => 0,
       flex: 2,
       minWidth: 160,
     },
@@ -54,7 +73,7 @@ export default function StudentsList() {
       field: 'stn',
       headerName: 'STN',
       sortable: true,
-      filter: true,
+      comparator: () => 0,
       flex: 1,
       minWidth: 110,
       cellRenderer: (params: any) =>
@@ -66,6 +85,7 @@ export default function StudentsList() {
       field: 'grade',
       headerName: 'Grade',
       sortable: true,
+      comparator: () => 0,
       flex: 1,
       minWidth: 80,
     },
@@ -73,7 +93,7 @@ export default function StudentsList() {
       field: 'elaTier',
       headerName: 'ELA Tier',
       sortable: true,
-      filter: true,
+      comparator: () => 0,
       flex: 1,
       minWidth: 110,
       cellRenderer: (params: any) => <SubjectTierCell value={params.value} />,
@@ -82,7 +102,7 @@ export default function StudentsList() {
       field: 'mathTier',
       headerName: 'Math Tier',
       sortable: true,
-      filter: true,
+      comparator: () => 0,
       flex: 1,
       minWidth: 110,
       cellRenderer: (params: any) => <SubjectTierCell value={params.value} />,
@@ -91,6 +111,7 @@ export default function StudentsList() {
       field: 'isActive',
       headerName: 'Status',
       sortable: true,
+      comparator: () => 0,
       flex: 1,
       minWidth: 90,
       cellRenderer: (params: any) => <StatusCell value={params.value} />,
@@ -119,47 +140,57 @@ export default function StudentsList() {
     resizable: true,
   };
 
-  // Server-side datasource
-  const datasource = useCallback(() => ({
-    getRows: async (params: IGetRowsParams) => {
-      setIsLoading(true);
-      try {
-        const page = Math.floor(params.startRow / 50) + 1;
-        const sortModel = params.sortModel?.[0];
-        const result = await studentsApi.list({
-          page,
-          pageSize: 50,
-          search: searchRef.current || undefined,
-          sortBy: sortModel?.colId,
-          sortDir: sortModel?.sort as 'asc' | 'desc' | undefined,
-        });
-        setTotalCount(result.total);
-        params.successCallback(result.items, result.total);
-        gridRef.current?.api?.hideOverlay();
-      } catch {
-        params.failCallback();
-      } finally {
-        setIsLoading(false);
-      }
-    },
-  }), []);
-
-  const onGridReady = useCallback((event: GridReadyEvent) => {
-    setGridApi(event.api);
-    event.api.setGridOption('datasource', datasource());
-  }, [datasource]);
-
-  // Re-trigger datasource when search changes
   useEffect(() => {
-    if (gridApi) {
-      gridApi.setGridOption('datasource', datasource());
-    }
-  }, [search, gridApi, datasource]);
+    const next = searchInput.trim();
+    const timer = window.setTimeout(() => {
+      setSearch(current => {
+        if (current === next) return current;
+        setPage(1);
+        return next;
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
-  const [isExporting, setIsExporting] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setLoadError('');
+    studentsApi.list({
+      page,
+      pageSize,
+      search: search || undefined,
+      sortBy,
+      sortDir,
+    }).then(result => {
+      if (cancelled) return;
+      setStudents(result.items);
+      setTotalCount(result.total);
+    }).catch(() => {
+      if (cancelled) return;
+      setStudents([]);
+      setTotalCount(0);
+      setLoadError('Could not load students. Try Refresh.');
+    }).finally(() => {
+      if (!cancelled) setIsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [page, pageSize, search, sortBy, sortDir, refreshKey]);
 
-  const handleRefresh = () => {
-    if (gridApi) gridApi.setGridOption('datasource', datasource());
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const rangeFrom = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeTo = Math.min(page * pageSize, totalCount);
+
+  const handleRefresh = () => setRefreshKey(k => k + 1);
+
+  const handleSortChanged = (event: SortChangedEvent<Student>) => {
+    const sorted = event.api.getColumnState().find(col => col.sort);
+    const nextBy = sorted?.colId;
+    const nextDir = sorted?.sort === 'desc' ? 'desc' : sorted?.sort === 'asc' ? 'asc' : undefined;
+    if (nextBy === sortBy && nextDir === sortDir) return;
+    setSortBy(nextBy);
+    setSortDir(nextDir);
+    setPage(1);
   };
 
   const handleExport = async () => {
@@ -216,32 +247,93 @@ export default function StudentsList() {
           <input
             type="text"
             placeholder="Search by name, STN, or class…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lgs-blue focus:border-lgs-blue outline-none text-sm"
           />
         </div>
       </div>
 
-      {/* AG Grid */}
-      <div
-        className="ag-theme-quartz rounded-xl overflow-hidden shadow-sm border border-slate-200"
-        style={{ height: 600 }}
-      >
-        <AgGridReact<Student>
-          ref={gridRef}
-          columnDefs={columnDefs}
-          defaultColDef={defaultColDef}
-          rowModelType="infinite"
-          cacheBlockSize={50}
-          maxBlocksInCache={10}
-          onGridReady={onGridReady}
-          suppressCellFocus={true}
-          rowHeight={48}
-          headerHeight={44}
-          overlayLoadingTemplate='<span class="text-slate-500 text-sm">Loading students…</span>'
-          overlayNoRowsTemplate='<span class="text-slate-500 text-sm">No students found. Upload data to get started.</span>'
-        />
+      {/* AG Grid + pagination. One server page at a time; sorting is applied by the API. */}
+      <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-slate-200">
+        {loadError && (
+          <p className="px-4 py-2 text-sm text-red-600 bg-red-50 border-b border-red-100">{loadError}</p>
+        )}
+        <div className="ag-theme-quartz" style={{ minHeight: students.length === 0 ? 240 : undefined }}>
+          <AgGridReact<Student>
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            rowData={students}
+            loading={isLoading}
+            domLayout="autoHeight"
+            onSortChanged={handleSortChanged}
+            suppressCellFocus={true}
+            rowHeight={48}
+            headerHeight={44}
+            overlayLoadingTemplate='<span class="text-slate-500 text-sm">Loading students…</span>'
+            overlayNoRowsTemplate='<span class="text-slate-500 text-sm">No students found.</span>'
+            getRowId={params => params.data.studentId}
+          />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-slate-200">
+          <p className="text-sm text-slate-500">
+            {totalCount === 0
+              ? 'No students'
+              : `Showing ${rangeFrom.toLocaleString()}–${rangeTo.toLocaleString()} of ${totalCount.toLocaleString()}`}
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page <= 1 || isLoading}
+              className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent"
+              aria-label="Previous page"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            {pageWindow(Math.min(page, totalPages), totalPages).map((item, index) =>
+              item === 'gap' ? (
+                <span key={`gap-${index}`} className="px-1 text-slate-400 text-sm">…</span>
+              ) : (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setPage(item)}
+                  disabled={isLoading}
+                  aria-current={item === page ? 'page' : undefined}
+                  className={`min-w-8 h-8 px-2 rounded-lg text-sm font-medium ${
+                    item === page
+                      ? 'bg-lgs-blue text-white'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  } disabled:opacity-40`}
+                >
+                  {item}
+                </button>
+              )
+            )}
+            <button
+              type="button"
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages || isLoading}
+              className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent"
+              aria-label="Next page"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-500">
+            Rows
+            <select
+              value={pageSize}
+              onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              className="px-2 py-1 border border-slate-300 rounded-lg text-sm text-slate-700 bg-white focus:ring-2 focus:ring-lgs-blue outline-none"
+            >
+              {PAGE_SIZES.map(size => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
     </div>
   );
