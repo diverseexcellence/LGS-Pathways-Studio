@@ -1325,14 +1325,18 @@ export default function StudentProfile() {
       {/* Demographics Modal */}
       {showDemographics && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-bold text-slate-900 mb-5">Full Demographics</h3>
-            <div className="space-y-5 text-sm">
+          <div className="bg-white rounded-xl shadow-lg max-w-3xl w-full">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <h3 className="text-lg font-bold text-slate-900">Full Demographics</h3>
+              <button onClick={() => setShowDemographics(false)} className="text-slate-400 hover:text-slate-600" title="Close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-              {/* Student Identity */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Student Identity</p>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+            <div className="px-6 py-4 space-y-4">
+              <section>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Student Identity</p>
+                <div className="grid grid-cols-4 gap-x-6 gap-y-3">
                   {[
                     ['Full Name', formatDisplayName(student.fullName)],
                     ['STN', student.stn || 'N/A'],
@@ -1342,93 +1346,60 @@ export default function StudentProfile() {
                     ['Ethnicity', student.ethnicity === 'Y' || student.ethnicity === 'N' ? student.ethnicity : translateEthnicity(student.ethnicity)],
                     ['Race', optionLabel(RACE_OPTIONS, student.race) || 'N/A'],
                   ].map(([label, value]) => (
-                    <div key={label}>
-                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
-                      <span className="text-slate-900">{value}</span>
+                    <div key={label} className="min-w-0">
+                      <span className="block text-[11px] text-slate-400">{label}</span>
+                      <span className="block text-sm font-medium text-slate-900 truncate" title={value}>{value}</span>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
 
-              <div className="border-t border-slate-100" />
-
-              {/* Enrollment Information */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Enrollment Information</p>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+              <section className="border-t border-slate-100 pt-4">
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Enrollment</p>
+                <div className="grid grid-cols-4 gap-x-6 gap-y-3">
                   {[
                     ['Grade', normalizeGradeLabel(student.grade) || 'N/A'],
                     ['Class Group', student.classGroup || 'N/A'],
                     ['Homeroom', student.homeRoom || 'N/A'],
+                    ['Enrollment Status', student.isActive === false ? 'Unenrolled' : 'Enrolled'],
                     ['Entry Date', formatUsDate(student.entryDate)],
                     ['Exit Date', formatUsDate(student.exitDate)],
                     ['Enrolled', formatUsDate(student.enrolDate)],
-                    ['Enrollment Status', student.isActive === false ? 'Unenrolled' : 'Enrolled'],
                   ].map(([label, value]) => (
-                    <div key={label}>
-                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
-                      <span className="text-slate-900">{value}</span>
+                    <div key={label} className="min-w-0">
+                      <span className="block text-[11px] text-slate-400">{label}</span>
+                      <span className="block text-sm font-medium text-slate-900 truncate" title={value}>{value}</span>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
 
-              <div className="border-t border-slate-100" />
-
-              {/* Program & Support Indicators */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Program & Support Indicators</p>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+              <section className="border-t border-slate-100 pt-4">
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Programs & Language</p>
+                <div className="grid grid-cols-4 gap-x-6 gap-y-3">
                   {[
                     ['Special Education', toYesNo(student.spedStatus)],
                     ['504 Plan', toYesNo(student.section504, 'No')],
                     ['Lunch Status', optionLabel(LUNCH_OPTIONS, student.lunchStatus) || 'N/A'],
-                  ].map(([label, value]) => (
-                    <div key={label}>
-                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
-                      <span className="text-slate-900">{value}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="border-t border-slate-100" />
-
-              {/* EL / Language Details */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">EL / Language Details</p>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-                  {[
                     ['EL Status', toYesNo(student.ellStatus)],
                   ].map(([label, value]) => (
-                    <div key={label}>
-                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
-                      <span className="text-slate-900">{value}</span>
+                    <div key={label} className="min-w-0">
+                      <span className="block text-[11px] text-slate-400">{label}</span>
+                      <span className="block text-sm font-medium text-slate-900 truncate" title={value}>{value}</span>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
 
-              <div className="border-t border-slate-100" />
-
-              {/* Source Reference */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Source Reference</p>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-                  {[
-                    ['Source File', student.sourceFile || 'Unknown'],
-                  ].map(([label, value]) => (
-                    <div key={label}>
-                      <span className="block text-xs text-slate-400 font-medium">{label}</span>
-                      <span className="text-slate-900 font-mono text-xs break-all">{value}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
+              <section className="border-t border-slate-100 pt-4">
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Source</p>
+                <span className="block text-[11px] text-slate-400">Source File</span>
+                <span className="block text-xs font-medium text-slate-900 font-mono break-all">{student.sourceFile || 'Unknown'}</span>
+              </section>
             </div>
-            <div className="mt-6 flex justify-end">
-              <button onClick={() => setShowDemographics(false)} className="px-4 py-2 bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 rounded-lg transition-colors">
+
+            <div className="px-6 py-3 border-t border-slate-100 flex justify-end">
+              <button onClick={() => setShowDemographics(false)} className="px-4 py-2 bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 rounded-lg transition-colors">
                 Close
               </button>
             </div>
