@@ -144,25 +144,61 @@ public class TierEvidencePersistenceTests
     }
 
     [Fact]
-    public void AdminOverriddenSubject_IsNeverTouched_EvenWhenEvidenceChanges()
+    public void AdminOverriddenSubject_KeepsTheTier_AndRefreshesScoreAndCount()
     {
-        // Per-subject override gating has to survive the wider persistence rule: an admin's tier
-        // must not be overwritten, and the evidence-only path must not sneak past that guard.
+        // The override is the recommendation, so the tier and who set it stay. The score and the
+        // assessment count are a reading of the current evidence and have to move with it, or an
+        // overridden subject shows a stale caption after records are added or removed.
         var target = new SubjectTier
         {
             Tier = "Tier 1",
             Status = TierStatus.AdminOverride,
+            Score = 3.00,
+            DataPoints = 2,
             OverriddenBy = "velvet@lgs.local",
+            OverriddenAt = Now,
+            OverrideExplanation = "Held at Tier 1 for a documented reason",
         };
         var computed = TierCalculationService.ComputeSubject("ELA", [
             AssessmentBuilder.Ilearn("ELA", "CP1", "Below Proficiency", "2026-08-20"),
             AssessmentBuilder.Acadience("BOY", "Below Benchmark", "2026-08-18"),
         ], Ruleset);
 
-        Assert.False(TierCalculationService.ApplySubject(target, computed, "2.0", Now, out var tierMoved));
+        Assert.True(TierCalculationService.ApplySubject(target, computed, "2.0", Now, out var tierMoved));
         Assert.False(tierMoved);
         Assert.Equal("Tier 1", target.Tier);
-        Assert.Empty(target.Evidence);
+        Assert.Equal(TierStatus.AdminOverride, target.Status);
+        Assert.Equal("velvet@lgs.local", target.OverriddenBy);
+        Assert.Equal("Held at Tier 1 for a documented reason", target.OverrideExplanation);
+        Assert.Equal(computed.Score, target.Score);
+        Assert.Equal(computed.DataPoints, target.DataPoints);
+        Assert.NotEmpty(target.Evidence);
+        Assert.NotEqual(3.00, target.Score);
+    }
+
+    [Fact]
+    public void ForcedApply_ReplacesAdminOverrideWithSystemRecommendation()
+    {
+        var target = new SubjectTier
+        {
+            Tier = "Tier 1",
+            Status = TierStatus.AdminOverride,
+            OverriddenBy = "velvet@lgs.local",
+            OverriddenAt = Now,
+            OverrideExplanation = "Held at Tier 1 for a documented reason",
+        };
+        var computed = TierCalculationService.ComputeSubject("ELA", [
+            AssessmentBuilder.Ilearn("ELA", "CP1", "Below Proficiency", "2026-08-20"),
+            AssessmentBuilder.Acadience("BOY", "Below Benchmark", "2026-08-18"),
+        ], Ruleset);
+
+        Assert.True(TierCalculationService.ApplySubject(target, computed, "2.0", Now, out var tierMoved, force: true));
+        Assert.True(tierMoved);
+        Assert.Equal(TierStatus.SystemRecommended, target.Status);
+        Assert.Equal("Tier 3", target.Tier);
+        Assert.Null(target.OverriddenBy);
+        Assert.Null(target.OverrideExplanation);
+        Assert.NotEmpty(target.Evidence);
     }
 
     [Fact]

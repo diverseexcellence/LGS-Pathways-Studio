@@ -214,12 +214,17 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
                                or TierStatus.AdminOverride or TierStatus.LegacyFinalized))
             return BadRequest(new { message = "status must be 'Pending', 'System Recommended', or 'Admin Override'." });
 
+        if (dto.Status is not null && TierStatus.IsAdminOverride(dto.Status) && string.IsNullOrWhiteSpace(dto.Note))
+            return BadRequest(new { message = "An explanation is required before an override can be saved." });
+
         var priorTier = target.Tier;
         var priorStatus = target.Status;
 
         if (dto.Tier is not null) target.Tier = dto.Tier;
         if (dto.Status is not null)
             target.Status = TierStatus.IsAdminOverride(dto.Status) ? TierStatus.AdminOverride : dto.Status;
+        if (!string.IsNullOrWhiteSpace(dto.Note))
+            target.OverrideExplanation = dto.Note.Trim();
         target.OverriddenBy = CurrentAdminEmail;
         target.OverriddenAt = DateTime.UtcNow.ToString("o");
         student.LastUpdated = DateTime.UtcNow.ToString("o");
@@ -253,20 +258,16 @@ public class StudentsController(ICosmosDbService cosmos, IAuditService audit, IT
 
         return NoContent();
     }
-    // BRD ST-16 / Generate Recommendation button: recalculate tier for a single student.
-    // Per-subject override gating: a subject an admin has overridden is left untouched by the
-    // engine, so this only 400s when BOTH subjects are overridden (nothing left to compute).
+    // BRD ST-16 / Generate Recommendation button: recalculate tier for a single student
+    // from the system rules, including a subject an administrator previously overrode.
+    // Automatic paths (upload, record edit) still leave overrides in place.
     [HttpPost("{id}/recalculate-tier")]
     public async Task<IActionResult> RecalculateTier(string id)
     {
         var student = await cosmos.GetStudentAsync(id);
         if (student is null || !student.IsActive) return NotFound();
 
-        if (student.AllSubjectsOverridden)
-            return BadRequest(new { message = "Both ELA and Math tiers are set by Admin Override. Change them from the tier selector instead." });
-
-        // ComputeAndApplyAsync writes its own audit entry covering both subjects.
-        await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail);
+        await tierCalculation.ComputeAndApplyAsync(student, CurrentAdminId, CurrentAdminEmail, force: true);
 
         student = (await cosmos.GetStudentAsync(id))!;
         return Ok(student);

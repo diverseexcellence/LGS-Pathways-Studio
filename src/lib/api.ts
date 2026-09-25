@@ -80,6 +80,7 @@ export interface SubjectTier {
   computedAt: string | null;
   overriddenBy: string | null;
   overriddenAt: string | null;
+  overrideExplanation?: string | null;
   evidence: TierEvidence[];
 }
 
@@ -273,7 +274,7 @@ export const studentsApi = {
     request<void>(`/api/students/${id}`, { method: 'DELETE' }),
 
   recalculateTier: (id: string) =>
-    request<Student>(`/api/students/${id}/recalculate-tier`, { method: 'POST' }),
+    request<Student>(`/api/students/${id}/recalculate-tier`, { method: 'POST', body: '{}' }),
 
   // Per-subject override/finalize — there is no combined tier to set (TR-011).
   setSubjectTier: (id: string, subject: 'ela' | 'math', data: { tier?: string; status?: string; note?: string }) =>
@@ -335,7 +336,7 @@ export const SOURCE_PERIODS: Record<AssessmentSource, string[]> = {
 // categoryValues are authoritative — a label outside them resolves to no value at all.
 export const SOURCE_PROFICIENCY_FALLBACK: Record<AssessmentSource, string[]> = {
   ILEARN: ['Below Proficiency', 'Approaching Proficiency', 'At Proficiency', 'Above Proficiency'],
-  IXL: ['Far Below Grade Level', 'Below Grade Level', 'On Grade Level', 'Above Grade Level'],
+  IXL: ['Far Below Grade', 'Below Grade', 'On Grade', 'Above Grade'],
   Acadience: ['Well Below Benchmark', 'Below Benchmark', 'At Benchmark', 'Above Benchmark'],
   IREAD: ['Did Not Pass', 'Passed'],
 };

@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { studentsApi, assessmentsApi, aiApi, studentAuditApi, notesApi, configApi, Student, Assessment, AssessmentInput, AISummary, AuditEntry, CollaborationNote, TierRuleset } from '../lib/api';
 import { parseFlexibleDate, formatUsDate, formatUsDateTime } from '../lib/dates';
-import AssessmentRecordFields, { EMPTY_RECORD } from '../components/AssessmentRecordFields';
+import AssessmentRecordFields, { EMPTY_RECORD, matchProficiencyOption } from '../components/AssessmentRecordFields';
 import {
   ELL_OPTIONS, ENROLLMENT_OPTIONS, ETHNICITY_OPTIONS, GENDER_OPTIONS, LUNCH_OPTIONS,
   RACE_OPTIONS, TRUE_FALSE_OPTIONS, optionLabel, optionsWithCurrent,
@@ -82,9 +82,10 @@ const MTSS_STRATEGIES: Record<string, string[]> = {
   ]
 };
 
-function getAssessmentDisplayData(a: Assessment) {
+function getAssessmentDisplayData(a: Assessment, ruleset: TierRuleset | null) {
   const subject = normalizeSubject(a.subject || 'Mixed');
-  const proficiency = normalizeProficiency(a.proficiency || 'N/A');
+  const rawProficiency = a.proficiency || 'N/A';
+  const proficiency = matchProficiencyOption(a.uploadType, rawProficiency, ruleset) ?? normalizeProficiency(rawProficiency);
   const formattedDate = formatDate(a.date ?? '');
   // Kept alongside the display string so sorting compares actual dates, not the
   // locale-formatted text — different sources (Acadience "22/8/2025" vs IXL
@@ -116,6 +117,12 @@ function normalizeSubject(s: string) {
 
 function normalizeProficiency(p: string) {
   const l = p.toLowerCase().trim();
+  // IXL ("on grade") and Acadience ("at benchmark") keep their own wording. The keyword
+  // rules below are the ILEARN bands; "above" inside "above grade" must not become
+  // "Above Proficiency".
+  if (/\bgrade\b/.test(l) || /\bbenchmark\b/.test(l)) {
+    return l.replace(/\s+level$/, '').replace(/\b[a-z]/g, c => c.toUpperCase());
+  }
   // Already-normalised labels from backend — pass through as-is
   if (l === 'below proficiency') return 'Below Proficiency';
   if (l === 'approaching proficiency') return 'Approaching Proficiency';
@@ -233,6 +240,8 @@ export default function StudentProfile() {
   // Two independent subjects — there is no combined overall tier to override (TR-011).
   const [overrideTierEla, setOverrideTierEla] = useState('');
   const [overrideTierMath, setOverrideTierMath] = useState('');
+  const [overrideNoteEla, setOverrideNoteEla] = useState('');
+  const [overrideNoteMath, setOverrideNoteMath] = useState('');
   const [isSavingTier, setIsSavingTier] = useState<'ela' | 'math' | null>(null);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
@@ -253,6 +262,7 @@ export default function StudentProfile() {
   const [recordModal, setRecordModal] = useState<{ id: string | null; value: AssessmentInput } | null>(null);
   const [isSavingRecord, setIsSavingRecord] = useState(false);
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Assessment | null>(null);
   const [recordError, setRecordError] = useState('');
 
   // Newest assessment first by default (BRD: "Sorting by Date descending shows the most recent
@@ -298,6 +308,7 @@ export default function StudentProfile() {
 
   // BRD ST-16 – Generate Recommendation
   const [isGeneratingRec, setIsGeneratingRec] = useState(false);
+  const [recMessage, setRecMessage] = useState('');
 
   const studentId = id ?? '';
 
@@ -366,12 +377,18 @@ export default function StudentProfile() {
 
   async function handleOverrideTier(subject: 'ela' | 'math') {
     const value = subject === 'ela' ? overrideTierEla : overrideTierMath;
+    const note = (subject === 'ela' ? overrideNoteEla : overrideNoteMath).trim();
     if (!value || !student) return;
+    if (!note) {
+      alert('An explanation is required before an override can be saved.');
+      return;
+    }
     setIsSavingTier(subject);
     try {
-      const updated = await studentsApi.setSubjectTier(studentId, subject, { tier: value, status: 'Admin Override' });
+      const updated = await studentsApi.setSubjectTier(studentId, subject, { tier: value, status: 'Admin Override', note });
       setStudent(updated);
-      if (subject === 'ela') setOverrideTierEla(''); else setOverrideTierMath('');
+      if (subject === 'ela') { setOverrideTierEla(''); setOverrideNoteEla(''); }
+      else { setOverrideTierMath(''); setOverrideNoteMath(''); }
       await refreshAudit();
     } catch (e: any) {
       alert('Failed to save tier: ' + e.message);
@@ -381,10 +398,16 @@ export default function StudentProfile() {
   }
 
   async function handleGenerateRecommendation() {
+    const replacingOverride = isAdminOverride(student?.elaTier?.status) || isAdminOverride(student?.mathTier?.status);
+    if (replacingOverride && !confirm(
+      'Generate Recommendation replaces any administrator override with the tier calculated from this student\'s assessments. Continue?'
+    )) return;
     setIsGeneratingRec(true);
+    setRecMessage('');
     try {
       const updated = await studentsApi.recalculateTier(studentId);
       setStudent(updated);
+      setRecMessage('Recommendation updated from the system tiering rules.');
       await refreshAudit();
     } catch (e: any) {
       alert(e.message || 'Tier calculation failed.');
@@ -429,9 +452,14 @@ export default function StudentProfile() {
     setIsSavingRecord(true);
     setRecordError('');
     try {
+      const value = {
+        ...recordModal.value,
+        proficiency: matchProficiencyOption(recordModal.value.uploadType, recordModal.value.proficiency, tierRuleset)
+          ?? recordModal.value.proficiency,
+      };
       const result = recordModal.id
-        ? await assessmentsApi.update(studentId, recordModal.id, recordModal.value)
-        : await assessmentsApi.create(studentId, recordModal.value);
+        ? await assessmentsApi.update(studentId, recordModal.id, value)
+        : await assessmentsApi.create(studentId, value);
       setStudent(result.student);
       setRecordModal(null);
       await refreshRecordsAndAudit();
@@ -443,10 +471,7 @@ export default function StudentProfile() {
   }
 
   async function handleDeleteRecord(assessment: Assessment) {
-    if (!confirm(
-      `Delete this ${assessment.uploadType} ${assessment.subject ?? ''} record? ` +
-      'The tier will be recalculated without it.'
-    )) return;
+    setPendingDelete(null);
     setDeletingRecordId(assessment.id);
     try {
       const result = await assessmentsApi.remove(studentId, assessment.id);
@@ -512,7 +537,7 @@ export default function StudentProfile() {
   }
 
   const sortedAssessments = useMemo(() => {
-    const rows = assessments.map(a => ({ ...a, displayData: getAssessmentDisplayData(a) }));
+    const rows = assessments.map(a => ({ ...a, displayData: getAssessmentDisplayData(a, tierRuleset) }));
     if (!assessmentSortConfig) return rows;
     return [...rows].sort((a, b) => {
       let av: any = a.displayData[assessmentSortConfig.key as keyof typeof a.displayData] ?? '';
@@ -532,7 +557,7 @@ export default function StudentProfile() {
         ? assessmentSortConfig.direction === 'asc' ? 1 : -1
         : 0;
     });
-  }, [assessments, assessmentSortConfig]);
+  }, [assessments, assessmentSortConfig, tierRuleset]);
 
   // "Profile Viewed" is written on every page load, including this one, so it is separated from
   // the entries that record an actual change rather than listed alongside them.
@@ -824,7 +849,7 @@ export default function StudentProfile() {
                                 <Pencil className="w-4 h-4" />
                               </button>
                               <button
-                                onClick={() => handleDeleteRecord(a)}
+                                onClick={() => setPendingDelete(a)}
                                 disabled={deletingRecordId === a.id}
                                 className="text-slate-400 hover:text-red-500 disabled:opacity-40"
                                 title="Delete this record and recalculate the tier"
@@ -934,29 +959,30 @@ export default function StudentProfile() {
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-lgs-blue">
             <h2 className="text-lg font-semibold text-lgs-blue mb-4">Tier Management</h2>
 
-            {/* BRD ST-16: one Generate Recommendation button recomputes both subjects at once —
-                the engine skips whichever subject an admin has overridden. Override is
+            {/* BRD ST-16: one Generate Recommendation button recomputes both subjects from the
+                system tiering rules, including a subject an admin has overridden. Override is
                 per-subject below since ELA and Math are independent (TR-011). */}
             <div className="mb-4">
               <button
                 onClick={handleGenerateRecommendation}
-                disabled={isGeneratingRec || (isAdminOverride(student?.elaTier.status) && isAdminOverride(student?.mathTier.status))}
+                disabled={isGeneratingRec}
                 className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-medium rounded-lg hover:bg-lgs-blue-dark disabled:opacity-50 transition-colors"
-                title={isAdminOverride(student?.elaTier.status) && isAdminOverride(student?.mathTier.status) ? 'Both tiers are set by Admin Override — change them with the selectors below' : 'Run the tier recommendation engine for this student'}
+                title="Recalculate ELA and Math from the system tiering rules"
               >
                 <Sparkles className="w-4 h-4" />
                 {isGeneratingRec ? 'Calculating…' : 'Generate Recommendation'}
               </button>
+              {recMessage && <p className="text-xs text-green-700 mt-2">{recMessage}</p>}
             </div>
 
             {([
-              ['ela', 'ELA', student?.elaTier, overrideTierEla, setOverrideTierEla] as const,
-              ['math', 'Math', student?.mathTier, overrideTierMath, setOverrideTierMath] as const,
-            ]).map(([subject, label, t, value, setValue]) => (
+              ['ela', 'ELA', student?.elaTier, overrideTierEla, setOverrideTierEla, overrideNoteEla, setOverrideNoteEla] as const,
+              ['math', 'Math', student?.mathTier, overrideTierMath, setOverrideTierMath, overrideNoteMath, setOverrideNoteMath] as const,
+            ]).map(([subject, label, t, value, setValue, note, setNote]) => (
               <div key={subject} className="border-t border-slate-100 pt-4 mt-4 first:mt-0 first:border-t-0 first:pt-0">
                 <label className="block text-sm font-medium text-slate-700 mb-2">
                   {label} — Admin Override
-                  {isAdminOverride(t?.status) && <span className="ml-2 text-xs font-normal text-slate-400">(set by an administrator — Generate Recommendation won't overwrite this)</span>}
+                  {isAdminOverride(t?.status) && <span className="ml-2 text-xs font-normal text-slate-400">(set by an administrator)</span>}
                 </label>
                 <div className="flex gap-2">
                   <select
@@ -971,12 +997,26 @@ export default function StudentProfile() {
                   </select>
                   <button
                     onClick={() => handleOverrideTier(subject)}
-                    disabled={!value || isSavingTier === subject}
+                    disabled={!value || !note.trim() || isSavingTier === subject}
                     className="px-4 py-2 bg-lgs-red text-white text-sm font-medium rounded-lg hover:bg-lgs-red-dark disabled:opacity-50"
                   >
                     {isSavingTier === subject ? '...' : 'Save'}
                   </button>
                 </div>
+                <label className="block text-xs font-medium text-slate-500 mt-2 mb-1">Explanation (required)</label>
+                <textarea
+                  value={note}
+                  onChange={e => setNote(e.target.value)}
+                  rows={2}
+                  placeholder="Why is this tier being overridden?"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-lgs-blue outline-none resize-y"
+                />
+                {t?.overrideExplanation && (
+                  <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                    <span className="font-medium text-slate-500">Saved explanation: </span>
+                    {t.overrideExplanation}
+                  </p>
+                )}
                 {t?.reasoning && (
                   <details className="mt-2">
                     <summary className="text-xs text-slate-400 cursor-pointer hover:text-lgs-blue">Tiering Evidence</summary>
@@ -1133,6 +1173,34 @@ export default function StudentProfile() {
           </ul>
         )}
       </div>
+
+      {pendingDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6">
+            <h3 className="text-lg font-bold text-slate-900">Delete Assessment Record</h3>
+            <p className="text-sm text-slate-600 mt-2">
+              Are you sure you want to delete this assessment record?
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                className="px-4 py-2 text-slate-700 font-medium hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteRecord(pendingDelete)}
+                disabled={deletingRecordId === pendingDelete.id}
+                className="px-4 py-2 bg-lgs-red text-white font-medium hover:bg-lgs-red-dark rounded-lg disabled:opacity-50"
+              >
+                {deletingRecordId === pendingDelete.id ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add / edit one assessment record — the tier is recalculated on save */}
       {recordModal && (
@@ -1386,7 +1454,8 @@ export default function StudentProfile() {
                   ['Type', selectedAssessment.uploadType],
                   ['Subject', normalizeSubject(selectedAssessment.subject ?? '')],
                   ['Score', selectedAssessment.score ?? 'N/A'],
-                  ['Proficiency', normalizeProficiency(selectedAssessment.proficiency ?? 'N/A')],
+                  ['Proficiency', matchProficiencyOption(selectedAssessment.uploadType, selectedAssessment.proficiency, tierRuleset)
+                    ?? normalizeProficiency(selectedAssessment.proficiency ?? 'N/A')],
                   ['Period', selectedAssessment.period ?? 'Not identified — not counted'],
                   ['Date', formatDate(selectedAssessment.date ?? '')],
                 ].map(([label, value]) => (

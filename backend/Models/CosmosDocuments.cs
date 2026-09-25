@@ -186,6 +186,11 @@ public class SubjectTier
     [JsonProperty("overriddenAt")]
     public string? OverriddenAt { get; set; }
 
+    /// <summary>Required when an administrator overrides the tier. Kept with the subject so the
+    /// profile can show why the system recommendation was replaced.</summary>
+    [JsonProperty("overrideExplanation")]
+    public string? OverrideExplanation { get; set; }
+
     /// <summary>Full evidence trail: every candidate record considered, whether it counted, and why
     /// not when it didn't. Capped to a reasonable size before persisting.</summary>
     [JsonProperty("evidence", ObjectCreationHandling = ObjectCreationHandling.Replace)]

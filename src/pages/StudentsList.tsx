@@ -5,26 +5,41 @@ import { ColDef, SortChangedEvent } from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
 import { studentsApi, exportApi, Student, SubjectTier } from '../lib/api';
-import { Users, Search, RefreshCw, Download, UserPlus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Users, Search, RefreshCw, Download, UserPlus, ChevronLeft, ChevronRight, Pencil } from 'lucide-react';
 
 const PAGE_SIZES = [25, 50, 100];
 
+// Same provenance cue as the student profile: a filled pill is an Admin Override, an outlined
+// pill is the system recommendation. "Finalized" is the pre-rename name for an override.
+function isAdminOverride(status?: string | null) {
+  return status === 'Admin Override' || status === 'Finalized';
+}
+
 const SubjectTierCell = ({ value }: { value: SubjectTier | undefined }) => {
   const tier = value?.tier || '';
-  const cls =
-    tier === 'Tier 1' ? 'bg-green-100 text-green-700' :
-    tier === 'Tier 2' ? 'bg-yellow-100 text-yellow-700' :
-    tier === 'Tier 3' ? 'bg-red-100 text-red-700' :
-    'bg-slate-100 text-slate-600';
-  const pendingTitle = value?.status === 'Pending'
+  const override = isAdminOverride(value?.status);
+  const cls = override
+    ? tier === 'Tier 1' ? 'bg-green-600 text-white border-green-600'
+      : tier === 'Tier 2' ? 'bg-yellow-600 text-white border-yellow-600'
+      : tier === 'Tier 3' ? 'bg-red-600 text-white border-red-600'
+      : 'bg-slate-500 text-white border-slate-500'
+    : tier === 'Tier 1' ? 'bg-white text-green-700 border-green-400'
+      : tier === 'Tier 2' ? 'bg-white text-yellow-700 border-yellow-400'
+      : tier === 'Tier 3' ? 'bg-white text-red-700 border-red-400'
+      : 'bg-slate-100 text-slate-600 border-slate-300';
+  const title = value?.status === 'Pending'
     ? value.pendingReason === 'no_assessments' ? 'No assessment data yet.'
-    : value.pendingReason === 'insufficient_data_points' ? `Only ${value.dataPoints} of the required data points are available.`
-    : value.pendingReason === 'all_evidence_excluded' ? 'Assessment data present but none of it is usable evidence.'
-    : 'Pending / Review — not enough evidence for an automatic tier.'
-    : undefined;
+      : value.pendingReason === 'insufficient_data_points' ? `Only ${value.dataPoints} of the required data points are available.`
+      : value.pendingReason === 'all_evidence_excluded' ? 'Assessment data present but none of it is usable evidence.'
+      : 'Pending / Review — not enough evidence for an automatic tier.'
+    : override ? 'Admin Override' : value?.status || undefined;
   return (
-    <span className="inline-flex items-center gap-1.5" title={pendingTitle}>
-      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{tier || 'Pending'}</span>
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border-2 whitespace-nowrap ${cls}`}
+      title={title}
+    >
+      {override && <Pencil className="w-3 h-3 shrink-0" />}
+      {tier || 'Pending'}
     </span>
   );
 };

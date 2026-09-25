@@ -7,9 +7,14 @@ public interface ITierCalculationService
     /// <summary>
     /// Computes ELA and Math tier recommendations independently for the student based on their
     /// current assessments, updates the StudentDocument in Cosmos, and writes an audit entry when
-    /// something actually changed. A subject whose status is "Admin Override" is never touched.
+    /// something actually changed. A subject whose status is "Admin Override" keeps that tier
+    /// decision; its score and assessment count still refresh from the current evidence unless
+    /// <paramref name="force"/> is true, which replaces the decision with the system tier.
     /// </summary>
-    Task ComputeAndApplyAsync(StudentDocument student, int systemAdminId = 0, string systemAdminEmail = "system");
+    /// <param name="force">When true, an administrator override is replaced by the system
+    /// recommendation. Upload and record edits leave this false so a deliberate override is kept.
+    /// The student-profile Generate Recommendation action passes true.</param>
+    Task ComputeAndApplyAsync(StudentDocument student, int systemAdminId = 0, string systemAdminEmail = "system", bool force = false);
 
     /// <summary>
     /// Batched version for bulk recalculation (post-upload, recalculate-all). Fetches all
@@ -25,11 +30,11 @@ public class TierCalculationService(
 {
     // ── Public entry points ─────────────────────────────────────────────────────
 
-    public async Task ComputeAndApplyAsync(StudentDocument student, int systemAdminId = 0, string systemAdminEmail = "system")
+    public async Task ComputeAndApplyAsync(StudentDocument student, int systemAdminId = 0, string systemAdminEmail = "system", bool force = false)
     {
         var assessments = await cosmos.GetAssessmentsAsync(student.StudentId);
         var ruleset = await cosmos.GetTierRulesetConfigAsync();
-        await ApplyOneAsync(student, assessments, ruleset, systemAdminId, systemAdminEmail);
+        await ApplyOneAsync(student, assessments, ruleset, systemAdminId, systemAdminEmail, force);
     }
 
     public async Task<int> ComputeAndApplyBatchAsync(IReadOnlyList<StudentDocument> students, int systemAdminId = 0, string systemAdminEmail = "system")
@@ -60,13 +65,14 @@ public class TierCalculationService(
         List<AssessmentDocument> assessments,
         TierRulesetConfigDocument ruleset,
         int systemAdminId,
-        string systemAdminEmail)
+        string systemAdminEmail,
+        bool force = false)
     {
         var computation = ComputeAll(student, assessments, ruleset);
         var now = DateTime.UtcNow.ToString("o");
 
-        var elaChanged = ApplySubject(student.ElaTier, computation.Ela, computation.RulesetVersion, now, out var elaTierMoved);
-        var mathChanged = ApplySubject(student.MathTier, computation.Math, computation.RulesetVersion, now, out var mathTierMoved);
+        var elaChanged = ApplySubject(student.ElaTier, computation.Ela, computation.RulesetVersion, now, out var elaTierMoved, force);
+        var mathChanged = ApplySubject(student.MathTier, computation.Math, computation.RulesetVersion, now, out var mathTierMoved, force);
 
         if (!elaChanged && !mathChanged) return false;
 
@@ -93,7 +99,9 @@ public class TierCalculationService(
         return true;
     }
 
-    // A subject an administrator has overridden is never overwritten by the system.
+    // An administrator's tier decision is kept. The score and the assessment count still follow
+    // the current evidence, so an override does not freeze a stale caption. Generate Recommendation
+    // passes force and replaces the decision itself.
     //
     // Returns whether anything needs persisting; `tierMoved` reports the narrower question of
     // whether the recommendation itself changed, which is what gets audited.
@@ -107,12 +115,17 @@ public class TierCalculationService(
     // "Pending" with no explanation, and tier-data-quality (which reports from exactly these
     // persisted fields) could not see the excluded record at all.
     internal static bool ApplySubject(
-        SubjectTier target, SubjectTierComputation result, string rulesetVersion, string now, out bool tierMoved)
+        SubjectTier target, SubjectTierComputation result, string rulesetVersion, string now, out bool tierMoved, bool force = false)
     {
         tierMoved = false;
-        if (TierStatus.IsAdminOverride(target.Status)) return false;
+        // Automatic recalculation (upload, record edit) must not replace a person's tier decision.
+        // Generate Recommendation passes force so that button runs the system rules anyway.
+        var wasOverride = TierStatus.IsAdminOverride(target.Status);
+        if (wasOverride && !force)
+            return RefreshOverrideEvidence(target, result, rulesetVersion, now);
 
-        tierMoved = target.Tier != result.Tier
+        tierMoved = wasOverride
+            || target.Tier != result.Tier
             || target.Status != result.Status
             || target.Score != result.Score
             || target.DataPoints != result.DataPoints;
@@ -127,6 +140,36 @@ public class TierCalculationService(
 
         target.Tier = result.Tier;
         target.Status = result.Status;
+        target.Score = result.Score;
+        target.DataPoints = result.DataPoints;
+        target.PendingReason = result.PendingReason;
+        target.Reasoning = result.Reasoning;
+        target.RulesetVersion = rulesetVersion;
+        target.ComputedAt = now;
+        target.Evidence = newEvidence;
+        if (force)
+        {
+            target.OverriddenBy = null;
+            target.OverriddenAt = null;
+            target.OverrideExplanation = null;
+        }
+        return true;
+    }
+
+    /// <summary>Writes the freshly computed score, assessment count, and evidence onto an
+    /// overridden subject without changing the tier, the status, or who overrode it.</summary>
+    private static bool RefreshOverrideEvidence(
+        SubjectTier target, SubjectTierComputation result, string rulesetVersion, string now)
+    {
+        var newEvidence = result.Evidence.Take(24).ToList();
+        var changed = target.Score != result.Score
+            || target.DataPoints != result.DataPoints
+            || target.PendingReason != result.PendingReason
+            || target.Reasoning != result.Reasoning
+            || target.RulesetVersion != rulesetVersion
+            || !EvidenceMatches(target.Evidence, newEvidence);
+        if (!changed) return false;
+
         target.Score = result.Score;
         target.DataPoints = result.DataPoints;
         target.PendingReason = result.PendingReason;

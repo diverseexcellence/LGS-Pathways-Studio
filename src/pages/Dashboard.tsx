@@ -1,16 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { TrendingUp, Award, Users, Target, Info, ChevronRight, ChevronLeft, Pencil, Check, X, Download } from 'lucide-react';
-import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis, GradeProficiencyRow, GeoZipRow, TierSubject } from '../lib/api';
+import { studentsApi, Student, dashboardApi, GradeRow, TeacherRow, DrillStudent, TimelinePoint, DashboardKpis, GradeProficiencyRow, TierSubject } from '../lib/api';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
   BarChart, Bar
 } from 'recharts';
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
-
-const defaultCenter: [number, number] = [39.7684, -86.1581];
 
 
 interface Stats {
@@ -46,6 +42,29 @@ function ordinalGrade(grade: string): string {
     case 3: return `${n}rd`;
     default: return `${n}th`;
   }
+}
+
+// Home rooms are stored "Last, First". Initials read first name then last name
+// ("Brown, Mary" -> MB, not BM). A name without a comma is already "First Last".
+function homeRoomInitials(homeRoom: string): string {
+  const parts = homeRoom.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+  const first = homeRoom.includes(',') ? parts[1] : parts[0];
+  const last = homeRoom.includes(',') ? parts[0] : parts[parts.length - 1];
+  return (first[0] + last[0]).toUpperCase();
+}
+
+function canvasHasInk(canvas: HTMLCanvasElement): boolean {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+  const w = Math.min(canvas.width, 480);
+  const h = Math.min(canvas.height, 240);
+  const data = ctx.getImageData(0, 0, w, h).data;
+  for (let i = 0; i < data.length; i += 16) {
+    if (data[i] < 250 || data[i + 1] < 250 || data[i + 2] < 250) return true;
+  }
+  return false;
 }
 
 // "Wood, Ashley" + "3" -> "Wood - 3rd", for the caseload chart's hover tooltip.
@@ -117,10 +136,7 @@ function buildStats(students: Student[], subject: TierSubject): Stats {
     });
 
   const homeRoomData = Object.keys(homeRoomMap).map(hr => {
-    const parts = hr.replace(/,/g, '').split(/\s+/).filter(Boolean);
-    const initials = parts.length >= 2
-      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-      : hr.substring(0, 2).toUpperCase();
+    const initials = homeRoomInitials(hr);
     const m = homeRoomMap[hr];
     return {
       homeRoom: hr,
@@ -159,11 +175,10 @@ export default function Dashboard() {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
 
-  // ELA/Math toggle drives the tier-based charts (donut, grade/teacher tables, homeroom bar, ZIP
-  // map). Duplicating all five panels per subject would roughly double the page and break the
-  // single-image PDF export, so a single selector switches them instead — except the donut, shown
-  // as two compact side-by-side charts since comparing the two distributions at a glance is the
-  // main reason a per-subject tier was requested.
+  // ELA/Math toggle drives the tier-based charts (donut, grade/teacher tables, homeroom bar).
+  // Duplicating the panels per subject would roughly double the page, so a single selector
+  // switches them instead — except the donut, shown as two compact side-by-side charts since
+  // comparing the two distributions at a glance is the main reason a per-subject tier was requested.
   const [tierSubject, setTierSubject] = useState<TierSubject>('ela');
   const allStudentsRef = useRef<Student[]>([]);
 
@@ -182,7 +197,11 @@ export default function Dashboard() {
 
   // KPIs (real data)
   const [kpis, setKpis] = useState<DashboardKpis | null>(null);
+  const [kpisLoading, setKpisLoading] = useState(true);
   const [timelineData, setTimelineData] = useState<TimelinePoint[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(true);
+  const [proficiencyLoading, setProficiencyLoading] = useState(true);
+  const [goalLoading, setGoalLoading] = useState(true);
 
   // Target goal
   const [targetGoal, setTargetGoal] = useState(85);
@@ -192,17 +211,15 @@ export default function Dashboard() {
 
   // Drill-down
   const [drillView, setDrillView] = useState<DrillView>({ level: 'grades' });
+  const drillViewRef = useRef(drillView);
+  drillViewRef.current = drillView;
   const [gradeRows, setGradeRows] = useState<GradeRow[]>([]);
   const [teacherRows, setTeacherRows] = useState<TeacherRow[]>([]);
   const [drillStudents, setDrillStudents] = useState<DrillStudent[]>([]);
-  const [loadingDrill, setLoadingDrill] = useState(false);
+  const [loadingDrill, setLoadingDrill] = useState(true);
 
   // BRD DB-5: grade proficiency bands from actual assessment data
   const [gradeProficiencyData, setGradeProficiencyData] = useState<GradeProficiencyRow[]>([]);
-
-  // BRD DB-12: geographic distribution by ZIP (real data, no simulated socio-economic stats)
-  const [geoData, setGeoData] = useState<(GeoZipRow & { lat: number; lng: number })[]>([]);
-  const [geoLoading, setGeoLoading] = useState(false);
 
   useEffect(() => {
     async function fetchAll() {
@@ -238,6 +255,8 @@ export default function Dashboard() {
         setGoalInput(String(cfg.goalPct));
       } catch {
         // use default 85
+      } finally {
+        setGoalLoading(false);
       }
     }
 
@@ -247,6 +266,8 @@ export default function Dashboard() {
         setKpis(data);
       } catch (e) {
         console.error('KPI fetch failed', e);
+      } finally {
+        setKpisLoading(false);
       }
     }
 
@@ -256,6 +277,8 @@ export default function Dashboard() {
         setTimelineData(data);
       } catch (e) {
         console.error('Timeline fetch failed', e);
+      } finally {
+        setTimelineLoading(false);
       }
     }
 
@@ -265,33 +288,8 @@ export default function Dashboard() {
         setGradeProficiencyData(data);
       } catch (e) {
         console.error('Grade proficiency fetch failed', e);
-      }
-    }
-
-    async function fetchGeographic() {
-      setGeoLoading(true);
-      try {
-        const rows = await dashboardApi.geographic();
-        if (rows.length === 0) { setGeoLoading(false); return; }
-        // Resolve ZIP codes to coordinates via Nominatim (OpenStreetMap)
-        const resolved: (GeoZipRow & { lat: number; lng: number })[] = [];
-        for (const row of rows) {
-          try {
-            const res = await fetch(
-              `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(row.zip)}&countrycodes=us&format=json&limit=1`,
-              { headers: { 'Accept-Language': 'en' } }
-            );
-            const hits = await res.json();
-            if (hits.length > 0) {
-              resolved.push({ ...row, lat: parseFloat(hits[0].lat), lng: parseFloat(hits[0].lon) });
-            }
-          } catch { /* skip unresolvable ZIP */ }
-        }
-        setGeoData(resolved);
-      } catch (e) {
-        console.error('Geographic fetch failed', e);
       } finally {
-        setGeoLoading(false);
+        setProficiencyLoading(false);
       }
     }
 
@@ -300,18 +298,36 @@ export default function Dashboard() {
     fetchKpis();
     fetchTimeline();
     fetchGradeProficiency();
-    fetchGeographic();
   }, []);
 
-  // Refetch the grade breakdown, and reset the drill-down to the top level, whenever the
-  // ELA/Math toggle changes — a teacher/student drill-down for the previous subject would
-  // otherwise keep showing stale tier counts under the new subject.
+  // Refetch whichever grade-breakdown level is on screen when the subject changes.
+  // Stay on the selected class — resetting to All Grades made the ELA/Math toggle feel
+  // like it had navigated away.
   useEffect(() => {
     let cancelled = false;
-    setDrillView({ level: 'grades' });
-    dashboardApi.byGrade(tierSubject)
-      .then(rows => { if (!cancelled) setGradeRows(rows); })
-      .catch(e => console.error('Grade drill-down fetch failed', e));
+    const view = drillViewRef.current;
+    setLoadingDrill(true);
+    (async () => {
+      try {
+        if (view.level === 'grades') {
+          const rows = await dashboardApi.byGrade(tierSubject);
+          if (!cancelled) setGradeRows(rows);
+        } else if (view.level === 'teachers') {
+          const rows = await dashboardApi.teachersByGrade(view.grade, tierSubject);
+          if (!cancelled) setTeacherRows(rows);
+        } else {
+          const rows = await dashboardApi.studentsByGrade(view.grade);
+          const filtered = view.teacher
+            ? rows.filter(s => (s.homeRoom ?? s.classGroup) === view.teacher)
+            : rows;
+          if (!cancelled) setDrillStudents(filtered);
+        }
+      } catch (e) {
+        console.error('Grade drill-down fetch failed', e);
+      } finally {
+        if (!cancelled) setLoadingDrill(false);
+      }
+    })();
     return () => { cancelled = true; };
   }, [tierSubject]);
 
@@ -361,34 +377,81 @@ export default function Dashboard() {
     }
   }
 
+  const dashboardLoading = loadingStats || kpisLoading || timelineLoading || proficiencyLoading || goalLoading || loadingDrill;
+
   async function exportPdf() {
-    if (!dashboardRef.current) return;
+    const node = dashboardRef.current;
+    if (!node || dashboardLoading) return;
     setExportingPdf(true);
+    const excluded = node.querySelectorAll<HTMLElement>('[data-pdf-exclude]');
+    const clipRestore: { el: Element; value: string }[] = [];
+    excluded.forEach((el) => { el.style.visibility = 'hidden'; });
+    // Recharts clips each plot with an SVG clip-path. html-to-image draws the page through an
+    // SVG foreignObject, and Chrome drops those clips, so the charts come out as empty boxes.
+    node.querySelectorAll('[clip-path]').forEach((el) => {
+      const value = el.getAttribute('clip-path');
+      if (value) {
+        clipRestore.push({ el, value });
+        el.removeAttribute('clip-path');
+      }
+    });
     try {
-      const [{ toPng }, { jsPDF }] = await Promise.all([
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const [{ toCanvas }, { jsPDF }] = await Promise.all([
         import('html-to-image'),
         import('jspdf'),
       ]);
-      // Physically hide excluded elements during capture, then restore.
-      const excluded = dashboardRef.current.querySelectorAll<HTMLElement>('[data-pdf-exclude]');
-      excluded.forEach((el) => { el.style.visibility = 'hidden'; });
-      const dataUrl = await toPng(dashboardRef.current, { pixelRatio: 2 });
-      excluded.forEach((el) => { el.style.visibility = ''; });
-      const img = new Image();
-      img.src = dataUrl;
-      await new Promise((res) => { img.onload = res; });
-      const pdf = new jsPDF({ unit: 'mm', format: 'a3', orientation: 'landscape' });
+      const width = node.scrollWidth;
+      const height = node.scrollHeight;
+      const canvas = await toCanvas(node, {
+        backgroundColor: '#ffffff',
+        pixelRatio: 2,
+        cacheBust: true,
+        // Embedding the Google font stylesheet taints the capture and yields a blank page.
+        skipFonts: true,
+        fontEmbedCSS: '',
+        width,
+        height,
+        style: { backgroundColor: '#ffffff', transform: 'none' },
+        filter: (domNode) => !(domNode instanceof HTMLLinkElement),
+      });
+      if (canvas.width < 10 || canvas.height < 10 || !canvasHasInk(canvas)) {
+        throw new Error('The dashboard capture was empty.');
+      }
+
+      const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
-      const margin = 10;
-      const maxW = pageW - margin * 2;
-      const maxH = pageH - margin * 2;
-      const ratio = Math.min(maxW / img.width, maxH / img.height);
-      const w = img.width * ratio;
-      const h = img.height * ratio;
-      pdf.addImage(dataUrl, 'PNG', margin + (maxW - w) / 2, margin + (maxH - h) / 2, w, h);
+      const margin = 8;
+      const contentW = pageW - margin * 2;
+      const contentH = pageH - margin * 2;
+      const pxPerMm = canvas.width / contentW;
+      const pageSlicePx = Math.max(1, Math.floor(contentH * pxPerMm));
+
+      let y = 0;
+      let page = 0;
+      while (y < canvas.height) {
+        const sliceH = Math.min(pageSlicePx, canvas.height - y);
+        const slice = document.createElement('canvas');
+        slice.width = canvas.width;
+        slice.height = sliceH;
+        const ctx = slice.getContext('2d');
+        if (!ctx) throw new Error('Could not prepare the PDF page.');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, slice.width, slice.height);
+        ctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+        if (page > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', margin, margin, contentW, sliceH / pxPerMm);
+        y += sliceH;
+        page += 1;
+      }
       pdf.save(`lgs-dashboard-${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (e: any) {
+      console.error('PDF export failed', e);
+      alert(e?.message || 'PDF export failed.');
     } finally {
+      excluded.forEach((el) => { el.style.visibility = ''; });
+      clipRestore.forEach(({ el, value }) => el.setAttribute('clip-path', value));
       setExportingPdf(false);
     }
   }
@@ -412,13 +475,15 @@ export default function Dashboard() {
           <p className="text-slate-500 mt-1">Institutional academic growth and intervention analytics for the 2024-2025 school year.</p>
         </div>
         <button
+          type="button"
           onClick={exportPdf}
-          disabled={exportingPdf}
+          disabled={exportingPdf || dashboardLoading}
           data-pdf-exclude="true"
+          title={dashboardLoading ? 'Export is available once the dashboard has finished loading' : 'Export the dashboard as a PDF'}
           className="flex items-center gap-2 px-4 py-2 bg-lgs-blue text-white text-sm font-semibold rounded-xl hover:bg-blue-900 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <Download className="w-4 h-4" />
-          {exportingPdf ? 'Generating PDF…' : 'Export PDF'}
+          {exportingPdf ? 'Generating PDF…' : dashboardLoading ? 'Loading…' : 'Export PDF'}
         </button>
       </div>
 
@@ -518,8 +583,8 @@ export default function Dashboard() {
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} domain={[0, 3]} ticks={[0, 1, 2, 3]} />
                 <RechartsTooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} itemStyle={{ fontSize: '12px', fontWeight: 500 }} labelStyle={{ fontSize: '12px', color: '#64748b' }} />
                 <Legend iconType="square" wrapperStyle={{ fontSize: '12px', paddingTop: '20px' }} />
-                <Line type="monotone" name="ELA" dataKey="ela" stroke="#214965" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
-                <Line type="monotone" name="Math" dataKey="math" stroke="#b91c1c" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                <Line type="monotone" name="ELA" dataKey="ela" stroke="#214965" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} isAnimationActive={false} />
+                <Line type="monotone" name="Math" dataKey="math" stroke="#b91c1c" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -543,7 +608,7 @@ export default function Dashboard() {
                 <div className="flex-1">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie data={data} cx="50%" cy="50%" innerRadius={38} outerRadius={54} paddingAngle={2} dataKey="value" stroke="none">
+                      <Pie data={data} cx="50%" cy="50%" innerRadius={38} outerRadius={54} paddingAngle={2} dataKey="value" stroke="none" isAnimationActive={false}>
                         {data.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                       </Pie>
                       <RechartsTooltip formatter={(v: number, name: string, p: any) => [`${v}% (${p.payload.count} students)`, name]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
@@ -599,17 +664,17 @@ export default function Dashboard() {
                     <StaticLegend
                       items={[
                         { label: 'Above', color: '#15803d' },
-                        { label: 'On Grade', color: '#214965' },
+                        { label: 'At', color: '#214965' },
                         { label: 'Approaching', color: '#d97706' },
                         { label: 'Below', color: '#b91c1c' },
                       ]}
                     />
                   }
                 />
-                <Bar dataKey="below" name="Below" stackId="a" fill="#b91c1c" radius={[4, 0, 0, 4]} />
-                <Bar dataKey="approaching" name="Approaching" stackId="a" fill="#d97706" />
-                <Bar dataKey="on" name="On Grade" stackId="a" fill="#214965" />
-                <Bar dataKey="above" name="Above" stackId="a" fill="#15803d" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="below" name="Below" stackId="a" fill="#b91c1c" radius={[4, 0, 0, 4]} isAnimationActive={false} />
+                <Bar dataKey="approaching" name="Approaching" stackId="a" fill="#d97706" isAnimationActive={false} />
+                <Bar dataKey="on" name="At" stackId="a" fill="#214965" isAnimationActive={false} />
+                <Bar dataKey="above" name="Above" stackId="a" fill="#15803d" radius={[0, 4, 4, 0]} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -633,8 +698,8 @@ export default function Dashboard() {
                 {drillView.level === 'students' && `Grade ${(drillView as any).grade} — Students`}
               </h2>
               {/* Math and ELA tiers are calculated and finalized independently (TR-011) — this
-                  section, the homeroom bar, and the ZIP map all reflect whichever subject is
-                  selected below. Includes System Recommended tiers, not just Finalized ones. */}
+                  section and the homeroom bar reflect whichever subject is selected below.
+                  Includes System Recommended tiers, not just Finalized ones. */}
               <p className="text-xs text-slate-400 -mt-0.5 mb-1">{tierSubject === 'math' ? 'Math' : 'ELA'} tier — system-recommended or admin-overridden</p>
             {/* Breadcrumb */}
             <p className="text-sm text-slate-500 flex items-center gap-1 mt-0.5">
@@ -661,7 +726,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* ELA/Math toggle — drives this table, the homeroom bar, and the ZIP map below */}
+          {/* ELA/Math toggle — drives this table and the homeroom bar below */}
           <div className="flex rounded-lg border border-slate-200 bg-white p-0.5 shrink-0" data-pdf-exclude="true">
             {(['ela', 'math'] as TierSubject[]).map(subj => (
               <button
@@ -790,9 +855,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Home room + map */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {stats.homeRoomData.length > 0 && (
+      {stats.homeRoomData.length > 0 && (
           <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
             <div className="mb-6">
               <h2 className="text-lg font-bold text-lgs-blue flex items-center gap-2 uppercase tracking-wide">
@@ -820,71 +883,14 @@ export default function Dashboard() {
                       />
                     }
                   />
-                  <Bar dataKey="Tier 3" stackId="a" fill={TIER_COLORS['Tier 3']} />
-                  <Bar dataKey="Tier 2" stackId="a" fill={TIER_COLORS['Tier 2']} />
-                  <Bar dataKey="Tier 1" stackId="a" fill={TIER_COLORS['Tier 1']} />
+                  <Bar dataKey="Tier 3" stackId="a" fill={TIER_COLORS['Tier 3']} isAnimationActive={false} />
+                  <Bar dataKey="Tier 2" stackId="a" fill={TIER_COLORS['Tier 2']} isAnimationActive={false} />
+                  <Bar dataKey="Tier 1" stackId="a" fill={TIER_COLORS['Tier 1']} isAnimationActive={false} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
-        )}
-
-        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
-          <div className="mb-6">
-            <h2 className="text-lg font-bold text-lgs-blue flex items-center gap-2 uppercase tracking-wide">
-              <Target className="w-5 h-5 text-slate-400" />
-              Geographic Distribution
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">{tierSubject === 'math' ? 'Math' : 'ELA'} tier distribution by ZIP code. Circle size reflects student count; color reflects tier mix.</p>
-          </div>
-          <div className="h-[400px] relative rounded-xl overflow-hidden border border-slate-200 z-0">
-            <MapContainer center={defaultCenter} zoom={10} style={{ height: '100%', width: '100%' }}>
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              {geoData.map(row => {
-                const tier1 = tierSubject === 'math' ? row.mathTier1 : row.elaTier1;
-                const tier2 = tierSubject === 'math' ? row.mathTier2 : row.elaTier2;
-                const tier3 = tierSubject === 'math' ? row.mathTier3 : row.elaTier3;
-                return (
-                  <CircleMarker
-                    key={row.zip}
-                    center={[row.lat, row.lng]}
-                    radius={Math.max(6, Math.min(30, row.total * 1.5))}
-                    pathOptions={{
-                      color: tier3 > tier1 ? '#b91c1c' : '#214965',
-                      fillColor: tier3 > tier1 ? '#b91c1c' : '#214965',
-                      fillOpacity: 0.6,
-                      weight: 1,
-                    }}
-                  >
-                    <Popup>
-                      <div className="text-sm">
-                        <p className="font-semibold mb-1">ZIP: {row.zip}</p>
-                        <p>Total students: {row.total}</p>
-                        <p>{tierSubject === 'math' ? 'Math' : 'ELA'} — Tier 1: {tier1} &nbsp; Tier 2: {tier2} &nbsp; Tier 3: {tier3}</p>
-                      </div>
-                    </Popup>
-                  </CircleMarker>
-                );
-              })}
-              {geoData.length > 0 && <GeoMapFitBounds data={geoData} />}
-            </MapContainer>
-          </div>
-          {geoLoading && (
-            <p className="text-xs text-slate-400 mt-2 italic">Resolving ZIP code coordinates…</p>
-          )}
-          {!geoLoading && geoData.length === 0 && (
-            <p className="text-xs text-slate-400 mt-2 italic">No ZIP code data available. Upload demographics files containing a Zip Code column to populate this map.</p>
-          )}
-          {!geoLoading && geoData.length > 0 && (
-            <p className="text-xs text-slate-400 mt-2">
-              {geoData.length} ZIP code{geoData.length !== 1 ? 's' : ''} · Coordinates via OpenStreetMap Nominatim
-            </p>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -918,16 +924,6 @@ function CaseloadTooltip({ active, payload }: { active?: boolean; payload?: any[
       <p className="font-medium" style={{ color: TIER_COLORS['Tier 3'] }}>Tier 3: {row['Tier 3']}</p>
     </div>
   );
-}
-
-function GeoMapFitBounds({ data }: { data: { lat: number; lng: number }[] }) {
-  const map = useMap();
-  useEffect(() => {
-    if (data.length === 0) return;
-    const bounds = data.map(d => [d.lat, d.lng] as [number, number]);
-    map.fitBounds(bounds, { padding: [40, 40] });
-  }, [data, map]);
-  return null;
 }
 
 function KpiCard({ icon, iconBg, badge, badgeColor, label, value, sub, tooltip }: {
